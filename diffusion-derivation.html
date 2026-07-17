@@ -1,0 +1,912 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diffusion Models, Derived in Full — ELBO → ε → DDIM</title>
+<script>
+  window.MathJax = {
+    tex: {
+      inlineMath: [['$','$'],['\\(','\\)']],
+      displayMath: [['$$','$$'],['\\[','\\]']],
+      processEscapes: true,
+      macros: {
+        x:'\\mathbf{x}',
+        z:'\\mathbf{z}',
+        u:'\\mathbf{u}',
+        s:'\\mathbf{s}',
+        eps:'\\boldsymbol{\\epsilon}',
+        N:'\\mathcal{N}',
+        ab:'\\bar{\\alpha}',
+        KL:'D_{\\mathrm{KL}}',
+        E:'\\mathbb{E}',
+        Id:'\\mathbf{I}',
+        half:'\\tfrac{1}{2}',
+        fwd:['\\color{#C77A3E}{#1}',1],
+        rev:['\\color{#6C81E8}{#1}',1],
+        good:['\\color{#4CAF82}{#1}',1]
+      }
+    },
+    chtml:{ scale:1.02 },
+    startup:{
+      pageReady(){
+        return MathJax.startup.defaultPageReady().then(function(){
+          window.dispatchEvent(new Event('resize'));
+        });
+      }
+    }
+  };
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+<style>
+  :root{
+    --bg:#F4F6F8; --surface:#FFFFFF; --surface2:#FBFCFD;
+    --ink:#181C23; --muted:#5B6373; --faint:#8A92A2;
+    --line:#E3E7EC; --line2:#EDF0F3;
+    --fwd:#B15E2B; --fwd-bg:#F7ECE2; --fwd-line:#E7CDB6;
+    --rev:#3C57CE; --rev-bg:#E9EDFB; --rev-line:#C6D1F4;
+    --good:#2E7D5B; --warn:#9A6B12;
+    --shadow:0 1px 2px rgba(20,28,48,.05),0 8px 30px rgba(20,28,48,.06);
+    --maxw:748px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0D1015; --surface:#151A21; --surface2:#11151B;
+      --ink:#E6EAF1; --muted:#9BA4B4; --faint:#6C7688;
+      --line:#242B36; --line2:#1C222B;
+      --fwd:#E0975C; --fwd-bg:#2A2016; --fwd-line:#4A3925;
+      --rev:#8397F4; --rev-bg:#171E32; --rev-line:#2C3A5F;
+      --good:#5FBF93; --warn:#D6A54A;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#F4F6F8; --surface:#FFFFFF; --surface2:#FBFCFD;
+    --ink:#181C23; --muted:#5B6373; --faint:#8A92A2;
+    --line:#E3E7EC; --line2:#EDF0F3;
+    --fwd:#B15E2B; --fwd-bg:#F7ECE2; --fwd-line:#E7CDB6;
+    --rev:#3C57CE; --rev-bg:#E9EDFB; --rev-line:#C6D1F4;
+    --good:#2E7D5B; --warn:#9A6B12;
+    --shadow:0 1px 2px rgba(20,28,48,.05),0 8px 30px rgba(20,28,48,.06);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0D1015; --surface:#151A21; --surface2:#11151B;
+    --ink:#E6EAF1; --muted:#9BA4B4; --faint:#6C7688;
+    --line:#242B36; --line2:#1C222B;
+    --fwd:#E0975C; --fwd-bg:#2A2016; --fwd-line:#4A3925;
+    --rev:#8397F4; --rev-bg:#171E32; --rev-line:#2C3A5F;
+    --good:#5FBF93; --warn:#D6A54A;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  body{
+    background:var(--bg);color:var(--ink);
+    font-family:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+    font-size:18px;line-height:1.68;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  }
+  img{max-width:100%}
+  .sans{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+
+  #bar{position:fixed;top:0;left:0;height:3px;width:0;z-index:60;
+    background:linear-gradient(90deg,var(--fwd),var(--rev));transition:width .1s linear}
+
+  .wrap{display:grid;grid-template-columns:minmax(0,1fr);max-width:1200px;margin:0 auto;padding:0 20px}
+  @media(min-width:1024px){.wrap{grid-template-columns:250px minmax(0,var(--maxw));gap:56px;justify-content:center}}
+
+  nav.toc{display:none}
+  @media(min-width:1024px){
+    nav.toc{display:block;position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+      padding:38px 0 40px;font-family:-apple-system,system-ui,sans-serif}
+    nav.toc .lbl{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 14px}
+    nav.toc a{display:block;color:var(--muted);text-decoration:none;font-size:13px;line-height:1.3;
+      padding:5px 0 5px 14px;border-left:2px solid var(--line);transition:.15s}
+    nav.toc a .n{color:var(--faint);font-variant-numeric:tabular-nums;margin-right:7px;font-size:11.5px}
+    nav.toc a:hover{color:var(--ink)}
+    nav.toc a.on{color:var(--ink);border-left-color:var(--rev);font-weight:600}
+  }
+  main{padding:0 0 140px;min-width:0}
+
+  header.hero{padding:80px 0 42px;border-bottom:1px solid var(--line)}
+  .eyebrow{font-family:-apple-system,system-ui,sans-serif;font-size:12px;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--rev);font-weight:600;margin:0 0 20px}
+  h1{font-size:clamp(32px,5.5vw,48px);line-height:1.06;margin:0 0 22px;font-weight:600;
+    letter-spacing:-.015em;text-wrap:balance}
+  .lede{font-size:19px;color:var(--muted);margin:0;max-width:62ch;text-wrap:pretty}
+  .meta{margin-top:28px;display:flex;gap:10px;flex-wrap:wrap;font-family:-apple-system,system-ui,sans-serif;font-size:12.5px}
+  .meta .k{display:inline-flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--line);
+    padding:6px 12px;border-radius:100px;color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .dot.f{background:var(--fwd)}.dot.r{background:var(--rev)}
+
+  section{padding:50px 0 8px;scroll-margin-top:20px;border-bottom:1px solid var(--line2)}
+  section:last-of-type{border-bottom:none}
+  .kicker{font-family:-apple-system,system-ui,sans-serif;font-size:12px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--faint);font-weight:600;margin:0 0 10px;display:flex;gap:10px;align-items:center}
+  .kicker .num{color:var(--rev)}
+  h2{font-size:28px;line-height:1.18;margin:0 0 18px;font-weight:600;letter-spacing:-.01em;text-wrap:balance}
+  h3{font-size:19px;margin:34px 0 10px;font-weight:600}
+  h4{font-family:-apple-system,system-ui,sans-serif;font-size:13px;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--muted);margin:28px 0 8px;font-weight:700}
+  p{margin:0 0 16px}
+  a.ref{color:var(--rev);text-decoration:none;border-bottom:1px solid var(--rev-line)}
+  strong{font-weight:600}
+  em{color:var(--ink)}
+  .fwd-t{color:var(--fwd);font-weight:600}
+  .rev-t{color:var(--rev);font-weight:600}
+  ul.clean,ol.clean{margin:0 0 16px;padding-left:24px}
+  ul.clean li,ol.clean li{margin:7px 0}
+
+  /* equations */
+  .eqbox{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+    padding:6px 20px;margin:20px 0;overflow-x:auto;box-shadow:var(--shadow)}
+  .eqbox.key{border-left:4px solid var(--rev);background:var(--surface2)}
+  .eqbox .tag{float:right;font-family:-apple-system,system-ui,sans-serif;font-size:10.5px;color:var(--faint);
+    letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line);border-radius:6px;padding:2px 8px;margin:14px 0 0 12px}
+  mjx-container{overflow-x:auto;overflow-y:hidden;max-width:100%}
+  mjx-container[display="true"]{margin:.55em 0!important}
+
+  /* derivation step list */
+  ol.steps{list-style:none;counter-reset:s;margin:20px 0;padding:0;
+    border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+  ol.steps>li{counter-increment:s;display:grid;grid-template-columns:30px 1fr;gap:14px;
+    padding:16px 18px;border-bottom:1px solid var(--line2)}
+  ol.steps>li:last-child{border-bottom:none}
+  ol.steps>li::before{content:counter(s);font-family:-apple-system,system-ui,sans-serif;font-size:12px;font-weight:700;
+    color:#fff;background:var(--rev);width:24px;height:24px;border-radius:7px;display:flex;align-items:center;
+    justify-content:center;margin-top:2px}
+  ol.steps .ln{min-width:0;overflow-x:auto}
+  ol.steps .wy{font-family:-apple-system,system-ui,sans-serif;font-size:14px;color:var(--muted);
+    margin:6px 0 0;line-height:1.5}
+  ol.steps .wy b{color:var(--ink);font-weight:600}
+
+  /* callouts */
+  .call{border-radius:12px;padding:16px 20px;margin:20px 0;font-size:16px;line-height:1.6;
+    border:1px solid var(--line);background:var(--surface2)}
+  .call .h{font-family:-apple-system,system-ui,sans-serif;font-size:12px;letter-spacing:.1em;
+    text-transform:uppercase;font-weight:700;margin:0 0 8px;display:flex;align-items:center;gap:8px}
+  .call.q{background:var(--rev-bg);border-color:var(--rev-line)}
+  .call.q .h{color:var(--rev)}
+  .call.f{background:var(--fwd-bg);border-color:var(--fwd-line)}
+  .call.f .h{color:var(--fwd)}
+  .call p:last-child{margin-bottom:0}
+  .call .badge{width:18px;height:18px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;
+    font-size:12px;font-weight:700;color:#fff}
+
+  /* term cards */
+  .terms{display:grid;gap:14px;margin:22px 0}
+  .term{border:1px solid var(--line);border-left-width:4px;border-radius:10px;padding:16px 18px;background:var(--surface)}
+  .term.t-prior{border-left-color:var(--fwd)}
+  .term.t-train{border-left-color:var(--rev)}
+  .term.t-rec{border-left-color:var(--good)}
+  .term.t-warn{border-left-color:var(--warn)}
+  .term .tt{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:4px;flex-wrap:wrap}
+  .term .name{font-family:-apple-system,system-ui,sans-serif;font-weight:700;font-size:14px}
+  .term .pill{font-family:-apple-system,system-ui,sans-serif;font-size:11px;font-weight:700;padding:3px 9px;border-radius:100px;letter-spacing:.03em}
+  .pill.learn{background:var(--rev-bg);color:var(--rev)}
+  .pill.fixed{background:var(--fwd-bg);color:var(--fwd)}
+  .pill.dec{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
+  .pill.warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+  .term .exp{font-size:15px;color:var(--muted);margin:6px 0 0;font-family:-apple-system,system-ui,sans-serif;line-height:1.55}
+  .term .exp b{color:var(--ink)}
+
+  /* notation table */
+  .note-tbl{width:100%;border-collapse:collapse;margin:16px 0;font-size:15px;overflow-x:auto;display:block}
+  .note-tbl td{border-bottom:1px solid var(--line2);padding:9px 12px;vertical-align:top}
+  .note-tbl td:first-child{white-space:nowrap;width:1%;padding-right:22px}
+  .note-tbl td:last-child{font-family:-apple-system,system-ui,sans-serif;font-size:14px;color:var(--muted)}
+
+  /* interactive */
+  .demo{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:22px;margin:24px 0;box-shadow:var(--shadow)}
+  .demo .row{display:flex;gap:24px;align-items:center;flex-wrap:wrap}
+  .demo canvas{width:180px;height:180px;image-rendering:pixelated;border-radius:10px;border:1px solid var(--line);background:#000;flex:none}
+  .demo .ctrl{flex:1;min-width:230px}
+  .demo .ctrl .lab{font-family:-apple-system,system-ui,sans-serif;font-size:13px;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:10px}
+  .demo .ctrl .lab b{color:var(--ink);font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--rev);height:24px}
+  .demo .readout{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13.5px;margin-top:16px;
+    background:var(--surface2);border:1px solid var(--line2);border-radius:8px;padding:12px 14px;overflow-x:auto;line-height:1.9}
+  .demo .readout .num{color:var(--rev);font-weight:600}
+  .demo .cap{font-family:-apple-system,system-ui,sans-serif;font-size:12.5px;color:var(--faint);margin-top:12px;line-height:1.55}
+
+  .tabs{margin:22px 0}
+  .tabbar{display:flex;gap:6px;background:var(--surface2);border:1px solid var(--line);border-radius:100px;padding:5px;width:fit-content;font-family:-apple-system,system-ui,sans-serif}
+  .tabbar button{border:none;background:none;font:inherit;font-size:13.5px;font-weight:600;color:var(--muted);
+    padding:8px 18px;border-radius:100px;cursor:pointer;transition:.15s}
+  .tabbar button.on{background:var(--rev);color:#fff}
+  .tabpane{display:none;margin-top:16px}
+  .tabpane.on{display:block}
+
+  .ddim{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:22px;margin:24px 0;box-shadow:var(--shadow)}
+  .ddim .track{position:relative;height:56px;margin:20px 4px 8px}
+  .ddim .line{position:absolute;top:27px;left:0;right:0;height:2px;background:var(--line)}
+  .ddim .tick{position:absolute;top:21px;width:12px;height:12px;border-radius:50%;background:var(--rev);
+    transform:translateX(-6px);box-shadow:0 0 0 4px var(--rev-bg)}
+  .ddim .ends{display:flex;justify-content:space-between;font-family:-apple-system,system-ui,sans-serif;font-size:12px;color:var(--faint);margin:0 2px}
+  .ddim .stat{display:flex;gap:26px;flex-wrap:wrap;margin-top:18px;font-family:-apple-system,system-ui,sans-serif}
+  .ddim .stat .s .v{font-size:26px;font-weight:700;color:var(--rev);font-variant-numeric:tabular-nums}
+  .ddim .stat .s .l{font-size:12px;color:var(--muted)}
+
+  footer{max-width:var(--maxw);margin:0 auto;padding:40px 20px 90px;color:var(--faint);
+    font-family:-apple-system,system-ui,sans-serif;font-size:13px;text-align:center;line-height:1.6}
+  .toggle{position:fixed;top:14px;right:16px;z-index:61;font-family:-apple-system,system-ui,sans-serif;
+    font-size:12px;background:var(--surface);border:1px solid var(--line);color:var(--muted);
+    border-radius:100px;padding:7px 13px;cursor:pointer;box-shadow:var(--shadow)}
+
+  /* chat widget */
+  #chatFab{position:fixed;bottom:22px;right:22px;z-index:70;display:flex;align-items:center;gap:9px;
+    font-family:-apple-system,system-ui,sans-serif;font-size:14px;font-weight:600;color:#fff;
+    background:var(--rev);border:none;border-radius:100px;padding:13px 18px;cursor:pointer;
+    box-shadow:0 6px 24px rgba(60,87,206,.4);transition:transform .15s,box-shadow .15s}
+  #chatFab:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(60,87,206,.5)}
+  #chatFab .ico{font-size:16px}
+  #chatFab.hidden{display:none}
+  #chatPanel{position:fixed;bottom:22px;right:22px;z-index:71;width:min(420px,calc(100vw - 32px));
+    height:min(640px,calc(100vh - 44px));background:var(--surface);border:1px solid var(--line);
+    border-radius:16px;box-shadow:0 18px 60px rgba(20,28,48,.28);display:none;flex-direction:column;overflow:hidden;
+    font-family:-apple-system,system-ui,sans-serif}
+  #chatPanel.open{display:flex}
+  .chat-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;
+    border-bottom:1px solid var(--line);background:var(--surface2)}
+  .chat-head .t{font-weight:700;font-size:14px;display:flex;align-items:center;gap:9px}
+  .chat-head .t .d{width:9px;height:9px;border-radius:50%;background:var(--rev)}
+  .chat-head .sub{font-size:11px;color:var(--faint);font-weight:500;margin-top:1px}
+  .chat-head button{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:4px 6px;border-radius:6px}
+  .chat-head button:hover{background:var(--line2);color:var(--ink)}
+  .chat-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px;background:var(--bg)}
+  .msg{max-width:88%;font-size:14.5px;line-height:1.55;border-radius:14px;padding:10px 13px;white-space:pre-wrap;word-wrap:break-word}
+  .msg.user{align-self:flex-end;background:var(--rev);color:#fff;border-bottom-right-radius:5px}
+  .msg.bot{align-self:flex-start;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-bottom-left-radius:5px}
+  .msg .cursor{display:inline-block;width:7px;height:15px;background:var(--rev);vertical-align:-2px;margin-left:1px;animation:blink 1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+  @media (prefers-reduced-motion:reduce){.msg .cursor{animation:none}}
+  .chat-suggest{display:flex;flex-wrap:wrap;gap:7px;padding:0 16px 4px}
+  .chat-suggest button{font:inherit;font-size:12px;color:var(--rev);background:var(--rev-bg);
+    border:1px solid var(--rev-line);border-radius:100px;padding:6px 11px;cursor:pointer;text-align:left}
+  .chat-suggest button:hover{background:var(--surface)}
+  .chat-foot{border-top:1px solid var(--line);padding:11px;background:var(--surface)}
+  .chat-input{display:flex;gap:8px;align-items:flex-end}
+  .chat-input textarea{flex:1;resize:none;border:1px solid var(--line);border-radius:10px;padding:9px 11px;
+    font:inherit;font-size:14px;background:var(--bg);color:var(--ink);max-height:120px;line-height:1.4}
+  .chat-input textarea:focus{outline:none;border-color:var(--rev)}
+  .chat-input button{flex:none;background:var(--rev);color:#fff;border:none;border-radius:10px;width:40px;height:38px;font-size:16px;cursor:pointer}
+  .chat-input button:disabled{opacity:.45;cursor:default}
+  .chat-key{padding:14px 16px;display:flex;flex-direction:column;gap:9px}
+  .chat-key label{font-size:12.5px;color:var(--muted);line-height:1.5}
+  .chat-key input{border:1px solid var(--line);border-radius:9px;padding:9px 11px;font:inherit;font-size:13px;background:var(--bg);color:var(--ink)}
+  .chat-key input:focus{outline:none;border-color:var(--rev)}
+  .chat-key .save{background:var(--rev);color:#fff;border:none;border-radius:9px;padding:9px;font:inherit;font-weight:600;font-size:13px;cursor:pointer}
+  .chat-key .note{font-size:11.5px;color:var(--faint);line-height:1.5}
+  .chat-key a{color:var(--rev)}
+  .chat-err{color:#c0392b;font-size:12px;padding:2px 2px 0}
+  @media (prefers-color-scheme:dark){.chat-err{color:#ff8b7a}}
+  :root[data-theme="dark"] .chat-err{color:#ff8b7a}
+  :root[data-theme="light"] .chat-err{color:#c0392b}
+</style>
+</head>
+<body>
+
+<div id="bar"></div>
+<button class="toggle" id="themeBtn">◐ theme</button>
+
+<div class="wrap">
+  <nav class="toc" aria-label="Contents">
+    <p class="lbl">The derivation</p>
+    <a href="#setup"><span class="n">0</span>Setup &amp; notation</a>
+    <a href="#processes"><span class="n">1</span>The two processes</a>
+    <a href="#marginal"><span class="n">2</span>The forward marginal</a>
+    <a href="#noise"><span class="n">3</span>Watch noise build</a>
+    <a href="#objective"><span class="n">4</span>Objective &amp; the ELBO</a>
+    <a href="#decomp"><span class="n">5</span>Splitting into KL terms</a>
+    <a href="#prior"><span class="n">6</span>The prior term $L_T$</a>
+    <a href="#posterior"><span class="n">7</span>The tractable posterior</a>
+    <a href="#gauss"><span class="n">8</span>Why $p_\theta$ is Gaussian</a>
+    <a href="#mse"><span class="n">9</span>KL → mean-matching MSE</a>
+    <a href="#eps"><span class="n">10</span>Reparameterizing to ε</a>
+    <a href="#weight"><span class="n">11</span>Keep or drop the weight</a>
+    <a href="#steps"><span class="n">12</span>Why sampling is sequential</a>
+    <a href="#ddim"><span class="n">13</span>DDIM</a>
+    <a href="#tradeoff"><span class="n">14</span>DDIM: speed vs quality</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <p class="eyebrow">Diffusion models · complete derivation</p>
+      <h1>Diffusion models, derived in full — from the ELBO to $\eps$ to DDIM</h1>
+      <p class="lede">A rigorous, self-contained walk through the mathematics of denoising diffusion, at the level of Ho et&nbsp;al. (2020) and Song et&nbsp;al. (2021). Every identity is derived — the ELBO, its exact decomposition into KL terms, the tractable posterior by completing the square, the collapse of the loss to noise-prediction MSE, and the non-Markovian construction behind DDIM. Nothing is asserted without proof; nothing is skipped.</p>
+      <div class="meta">
+        <span class="k"><span class="dot f"></span> Forward = fixed, not learned</span>
+        <span class="k"><span class="dot r"></span> Reverse = learned $p_\theta$</span>
+        <span class="k">LaTeX throughout · color-coded by role</span>
+      </div>
+    </header>
+
+    <!-- 0 SETUP -->
+    <section id="setup">
+      <p class="kicker"><span class="num">0</span> Ground rules</p>
+      <h2>Setup and notation</h2>
+      <p>We model a data distribution $q(\x_0)$ over $\x_0 \in \mathbb{R}^d$ (e.g. an image). A diffusion model introduces a sequence of latent variables $\x_1,\dots,\x_T$ of the same dimension, tied together by two Markov chains running in opposite directions. Fix this vocabulary and the whole derivation stays legible.</p>
+      <table class="note-tbl"><tbody>
+        <tr><td>$\x_0 \sim q(\x_0)$</td><td>a clean data point (the thing we want to generate)</td></tr>
+        <tr><td>$\x_1,\dots,\x_T$</td><td>progressively noisier latents; $\x_T$ is (almost) pure noise</td></tr>
+        <tr><td>$q$</td><td>the <span class="fwd-t">forward</span> (noising) process — <em>fixed by us, no parameters</em></td></tr>
+        <tr><td>$p_\theta$</td><td>the <span class="rev-t">reverse</span> (denoising) process — <em>a neural network with parameters $\theta$</em></td></tr>
+        <tr><td>$\beta_1,\dots,\beta_T \in (0,1)$</td><td>the variance schedule (a design choice)</td></tr>
+        <tr><td>$\alpha_t = 1-\beta_t,\quad \ab_t = \prod_{s=1}^{t}\alpha_s$</td><td>shorthand that makes the marginals clean</td></tr>
+        <tr><td>$\N(\x;\mu,\Sigma)$</td><td>a Gaussian density in $\x$ with mean $\mu$, covariance $\Sigma$</td></tr>
+        <tr><td>$\KL(q\,\|\,p)$</td><td>Kullback–Leibler divergence, $\E_{q}[\log(q/p)] \ge 0$</td></tr>
+      </tbody></table>
+      <p>Our single goal is <strong>maximum likelihood</strong>: make the observed data probable under the model, i.e. maximize $\log p_\theta(\x_0)$. Every equation below is machinery for doing that when the likelihood itself is an intractable integral.</p>
+    </section>
+
+    <!-- 1 PROCESSES -->
+    <section id="processes">
+      <p class="kicker"><span class="num">1</span> The objects</p>
+      <h2>Two Markov chains, pointed opposite ways</h2>
+
+      <h3>The forward process $q$ — fixed</h3>
+      <p>Start from data and add a little Gaussian noise at each step, with variance set by the schedule $\beta_t$:</p>
+      <div class="eqbox key">\[ \fwd{q(\x_t \mid \x_{t-1})} = \N\!\big(\x_t;\ \sqrt{1-\beta_t}\,\x_{t-1},\ \beta_t \Id\big),\qquad q(\x_{1:T}\mid \x_0) = \prod_{t=1}^{T} q(\x_t\mid \x_{t-1}). \]</div>
+      <p>Two facts we will lean on repeatedly. First, it is <strong>Markov</strong>: $\x_t$ depends only on $\x_{t-1}$. Second, it has <strong>no learnable parameters</strong> — we choose $\beta_t$ once and never touch it again. The scaling factor $\sqrt{1-\beta_t}$ (slightly less than 1) shrinks the signal a touch at each step while $\beta_t\Id$ injects noise; over many steps the data is annihilated.</p>
+
+      <h3>The reverse process $p_\theta$ — learned</h3>
+      <p>The generative model runs the chain backward, starting from pure noise and denoising one step at a time:</p>
+      <div class="eqbox key">\[ p_\theta(\x_{0:T}) = p(\x_T)\prod_{t=1}^{T} \rev{p_\theta(\x_{t-1}\mid \x_t)},\qquad \rev{p_\theta(\x_{t-1}\mid \x_t)} = \N\!\big(\x_{t-1};\ \mu_\theta(\x_t,t),\ \Sigma_\theta(\x_t,t)\big), \]</div>
+      <p>with the fixed prior $p(\x_T)=\N(\x_T;\mathbf{0},\Id)$. The only parameters in the entire model live in $\mu_\theta$ (and possibly $\Sigma_\theta$). We <em>assume</em> each reverse step is Gaussian; <a href="#gauss" class="ref">§8</a> proves when that assumption is justified. To generate a sample: draw $\x_T\sim\N(\mathbf 0,\Id)$ and iterate $\x_T \to \x_{T-1}\to\dots\to\x_0$.</p>
+      <p>Sampling $p_\theta(\x_0)=\int p_\theta(\x_{0:T})\,d\x_{1:T}$ is an integral over every possible noising trajectory — intractable. That intractable integral is exactly what the ELBO exists to route around (<a href="#objective" class="ref">§4</a>).</p>
+    </section>
+
+    <!-- 2 MARGINAL -->
+    <section id="marginal">
+      <p class="kicker"><span class="num">2</span> The one-shot jump</p>
+      <h2>The forward marginal $q(\x_t\mid\x_0)$, derived by induction</h2>
+      <p>A remarkable property: although $q$ is defined step by step, we can jump from $\x_0$ to any $\x_t$ in closed form. This is what makes training cheap, and it drives every later simplification. Using the reparameterization $\x_t=\sqrt{\alpha_t}\,\x_{t-1}+\sqrt{1-\alpha_t}\,\eps_{t-1}$ with $\eps_{t-1}\sim\N(\mathbf 0,\Id)$ (which is just $q(\x_t\mid\x_{t-1})$ written as a sample), unroll the recursion:</p>
+      <ol class="steps">
+        <li><div class="ln">\[ \x_t = \sqrt{\alpha_t}\,\x_{t-1} + \sqrt{1-\alpha_t}\,\eps_{t-1} \]</div>
+          <p class="wy">One forward step, sampled. $\eps_{t-1}\sim\N(\mathbf 0,\Id)$.</p></li>
+        <li><div class="ln">\[ = \sqrt{\alpha_t}\big(\sqrt{\alpha_{t-1}}\,\x_{t-2} + \sqrt{1-\alpha_{t-1}}\,\eps_{t-2}\big) + \sqrt{1-\alpha_t}\,\eps_{t-1} \]</div>
+          <p class="wy">Substitute the previous step. Distribute the $\sqrt{\alpha_t}$.</p></li>
+        <li><div class="ln">\[ = \sqrt{\alpha_t\alpha_{t-1}}\,\x_{t-2} + \underbrace{\sqrt{\alpha_t(1-\alpha_{t-1})}\,\eps_{t-2} + \sqrt{1-\alpha_t}\,\eps_{t-1}}_{\text{two independent Gaussians}} \]</div>
+          <p class="wy">The two noise terms are independent, zero-mean Gaussians with variances $\alpha_t(1-\alpha_{t-1})$ and $(1-\alpha_t)$.</p></li>
+        <li><div class="ln">\[ \sqrt{\alpha_t(1-\alpha_{t-1})}\,\eps_{t-2} + \sqrt{1-\alpha_t}\,\eps_{t-1} \;=\; \sqrt{\,\alpha_t(1-\alpha_{t-1})+(1-\alpha_t)\,}\;\bar\eps \;=\; \sqrt{1-\alpha_t\alpha_{t-1}}\;\bar\eps \]</div>
+          <p class="wy"><b>Key merge:</b> the sum of independent Gaussians is Gaussian, with variances adding. The two variances collapse: $\alpha_t-\alpha_t\alpha_{t-1}+1-\alpha_t = 1-\alpha_t\alpha_{t-1}$. Here $\bar\eps\sim\N(\mathbf 0,\Id)$.</p></li>
+        <li><div class="ln">\[ \therefore\quad \x_t = \sqrt{\alpha_t\alpha_{t-1}}\,\x_{t-2} + \sqrt{1-\alpha_t\alpha_{t-1}}\,\bar\eps \;\;\xrightarrow{\text{induct to }\x_0}\;\; \x_t = \sqrt{\ab_t}\,\x_0 + \sqrt{1-\ab_t}\,\eps \]</div>
+          <p class="wy">The recursion has the same shape one level down, so induction carries it all the way to $\x_0$: every intermediate noise merges into one $\eps\sim\N(\mathbf 0,\Id)$, and the products of $\alpha_s$ become $\ab_t=\prod_{s\le t}\alpha_s$.</p></li>
+      </ol>
+      <div class="eqbox key">\[ \fwd{q(\x_t\mid\x_0)} = \N\!\big(\x_t;\ \sqrt{\ab_t}\,\x_0,\ (1-\ab_t)\Id\big) \quad\Longleftrightarrow\quad \x_t = \sqrt{\ab_t}\,\x_0 + \sqrt{1-\ab_t}\,\eps,\ \ \eps\sim\N(\mathbf 0,\Id). \]<span class="tag">forward marginal</span></div>
+      <p>Read it off directly: the signal is scaled by $\sqrt{\ab_t}$ and buried under noise of scale $\sqrt{1-\ab_t}$. Since every $\alpha_s\lt 1$, the product $\ab_t\to 0$ as $t\to T$, so $\x_T$ becomes standard noise — which is exactly why sampling can start from $\N(\mathbf 0,\Id)$.</p>
+    </section>
+
+    <!-- 3 NOISE DEMO -->
+    <section id="noise">
+      <p class="kicker"><span class="num">3</span> Build intuition</p>
+      <h2>Watch the marginal in action</h2>
+      <p>Drag the timestep. Each pixel is computed by the boxed formula above — signal scaled by $\sqrt{\ab_t}$, noise of scale $\sqrt{1-\ab_t}$ mixed in. By $t=T$ the image <em>is</em> the prior $\N(\mathbf 0,\Id)$.</p>
+      <div class="demo">
+        <div class="row">
+          <canvas id="cv" width="96" height="96" aria-label="Noised image preview"></canvas>
+          <div class="ctrl">
+            <div class="lab"><span>timestep&nbsp; $t$</span><b><span id="tval">0</span> / 1000</b></div>
+            <input type="range" id="trange" min="0" max="1000" value="0" step="1" aria-label="Diffusion timestep">
+            <div class="readout">
+              x_t = <span class="num" id="ra">1.000</span>·x_0 + <span class="num" id="rb">0.000</span>·&epsilon;<br>
+              &alpha;&#772;_t = <span class="num" id="rabar">1.0000</span> &nbsp;·&nbsp; SNR = <span class="num" id="rsnr">&infin;</span>
+            </div>
+            <p class="cap">Linear schedule, $\beta$ from $10^{-4}$ to $0.02$, $T=1000$ — the original DDPM setup. Noise is re-sampled each frame, so the flicker <em>is</em> the randomness of $\eps$.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4 OBJECTIVE -->
+    <section id="objective">
+      <p class="kicker"><span class="num">4</span> The bound</p>
+      <h2>The likelihood objective and the ELBO</h2>
+      <p>We cannot evaluate $\log p_\theta(\x_0)$ directly, so we bound it. Multiply and divide inside the integral by the forward density $q(\x_{1:T}\mid\x_0)$ — legal since it is strictly positive — turning the integral into an expectation, then apply <strong>Jensen's inequality</strong> ($\log$ is concave, so $\log\E[\,\cdot\,]\ge\E[\log\,\cdot\,]$):</p>
+      <ol class="steps">
+        <li><div class="ln">\[ \log p_\theta(\x_0) = \log\!\int p_\theta(\x_{0:T})\,d\x_{1:T} \]</div>
+          <p class="wy">The marginal is the joint integrated over every latent — the intractable object.</p></li>
+        <li><div class="ln">\[ = \log\!\int q(\x_{1:T}\mid\x_0)\,\frac{p_\theta(\x_{0:T})}{q(\x_{1:T}\mid\x_0)}\,d\x_{1:T} = \log\,\E_{q}\!\left[\frac{p_\theta(\x_{0:T})}{q(\x_{1:T}\mid\x_0)}\right] \]</div>
+          <p class="wy">Importance-sampling trick: introduce $q$. Now it is an expectation under the forward chain — which we can sample from.</p></li>
+        <li><div class="ln">\[ \ge\ \E_{q}\!\left[\log\frac{p_\theta(\x_{0:T})}{q(\x_{1:T}\mid\x_0)}\right] \;=:\; L \qquad\text{(the ELBO)} \]</div>
+          <p class="wy">Jensen. $L$ is a <b>lower bound</b> on the log-likelihood. We minimize $-L$, a valid upper bound on the negative log-likelihood.</p></li>
+      </ol>
+      <p>The inequality's gap is not a mystery — it is <em>exactly</em> a KL divergence. Writing the reverse-time posterior $p_\theta(\x_{1:T}\mid\x_0)=p_\theta(\x_{0:T})/p_\theta(\x_0)$:</p>
+      <ol class="steps">
+        <li><div class="ln">\[ \KL\!\big(q(\x_{1:T}\mid\x_0)\,\big\|\,p_\theta(\x_{1:T}\mid\x_0)\big) = \E_q\!\left[\log\frac{q(\x_{1:T}\mid\x_0)}{p_\theta(\x_{1:T}\mid\x_0)}\right] = \E_q\!\left[\log\frac{q(\x_{1:T}\mid\x_0)\,p_\theta(\x_0)}{p_\theta(\x_{0:T})}\right] \]</div>
+          <p class="wy">Substitute $p_\theta(\x_{1:T}\mid\x_0)=p_\theta(\x_{0:T})/p_\theta(\x_0)$.</p></li>
+        <li><div class="ln">\[ = -L + \log p_\theta(\x_0) \quad\Longrightarrow\quad \log p_\theta(\x_0) = L + \underbrace{\KL\!\big(q(\x_{1:T}\mid\x_0)\,\big\|\,p_\theta(\x_{1:T}\mid\x_0)\big)}_{\ge\,0} \]</div>
+          <p class="wy">$\log p_\theta(\x_0)$ pulls out of the expectation (constant in $\x_{1:T}$). Because KL $\ge 0$, this <b>re-proves</b> $L\le\log p_\theta(\x_0)$ exactly, and shows the gap is the mismatch between the forward chain and the model's true posterior.</p></li>
+      </ol>
+      <div class="call q"><p class="h"><span class="badge" style="background:var(--rev)">i</span> What we optimize</p>
+        <p>Maximizing $L$ does two things at once: it pushes up the likelihood <em>and</em> drives the model's posterior toward the fixed forward chain. Everything from here is algebra to turn $-L$ into something we can actually compute and differentiate.</p></div>
+    </section>
+
+    <!-- 5 DECOMP -->
+    <section id="decomp">
+      <p class="kicker"><span class="num">5</span> The heart of it</p>
+      <h2>Decomposing $-L$ into per-step KL divergences</h2>
+      <p>As one expectation, $-L$ is opaque. The famous rewrite regroups it into a sum of terms, each a KL between two <em>Gaussians</em> we can write in closed form. The whole trick is to re-express each forward step by conditioning on $\x_0$ and applying Bayes' rule. Here is every step.</p>
+      <ol class="steps">
+        <li><div class="ln">\[ -L = \E_q\!\left[-\log\frac{p_\theta(\x_{0:T})}{q(\x_{1:T}\mid\x_0)}\right] = \E_q\!\left[-\log p(\x_T) - \sum_{t\ge 1}\log\frac{p_\theta(\x_{t-1}\mid\x_t)}{q(\x_t\mid\x_{t-1})}\right] \]</div>
+          <p class="wy">Substitute the two factorized products from <a href="#processes" class="ref">§1</a> and split the log of the ratio.</p></li>
+        <li><div class="ln">\[ = \E_q\!\left[-\log p(\x_T) - \sum_{t\ge 2}\log\frac{p_\theta(\x_{t-1}\mid\x_t)}{q(\x_t\mid\x_{t-1})} - \log\frac{p_\theta(\x_0\mid\x_1)}{q(\x_1\mid\x_0)}\right] \]</div>
+          <p class="wy">Peel off the $t=1$ term; we treat it separately at the end.</p></li>
+        <li><div class="ln">\[ q(\x_t\mid\x_{t-1}) \;\overset{\text{Markov}}{=}\; q(\x_t\mid\x_{t-1},\x_0) \;\overset{\text{Bayes}}{=}\; \frac{q(\x_{t-1}\mid\x_t,\x_0)\,q(\x_t\mid\x_0)}{q(\x_{t-1}\mid\x_0)} \]</div>
+          <p class="wy"><b>The pivot.</b> Conditioning on $\x_0$ is free (the chain is Markov), and Bayes' rule flips the direction — introducing the <em>tractable posterior</em> $q(\x_{t-1}\mid\x_t,\x_0)$ we compute in <a href="#posterior" class="ref">§7</a>.</p></li>
+        <li><div class="ln">\[ \sum_{t\ge 2}\log\frac{p_\theta(\x_{t-1}\mid\x_t)}{q(\x_t\mid\x_{t-1})} = \sum_{t\ge 2}\log\frac{p_\theta(\x_{t-1}\mid\x_t)}{q(\x_{t-1}\mid\x_t,\x_0)} + \sum_{t\ge 2}\log\frac{q(\x_{t-1}\mid\x_0)}{q(\x_t\mid\x_0)} \]</div>
+          <p class="wy">Substitute step 3 and split the log again. The second sum is a telescope.</p></li>
+        <li><div class="ln">\[ \sum_{t=2}^{T}\log\frac{q(\x_{t-1}\mid\x_0)}{q(\x_t\mid\x_0)} = \log q(\x_1\mid\x_0) - \log q(\x_T\mid\x_0) \]</div>
+          <p class="wy"><b>Telescoping cancellation:</b> consecutive numerator/denominator terms annihilate; only the two endpoints survive. This is what conjures the prior term $L_T$ out of thin air.</p></li>
+        <li><div class="ln">\[ -\log\frac{p_\theta(\x_0\mid\x_1)}{q(\x_1\mid\x_0)} = -\log p_\theta(\x_0\mid\x_1) + \log q(\x_1\mid\x_0) \]</div>
+          <p class="wy">Expand the leftover $t=1$ term. Its $+\log q(\x_1\mid\x_0)$ will cancel the $-\log q(\x_1\mid\x_0)$ that step 5 contributes with the overall minus sign.</p></li>
+        <li><div class="ln">\[ -L = \E_q\!\left[\ \log\frac{q(\x_T\mid\x_0)}{p(\x_T)} \;+\; \sum_{t=2}^{T}\log\frac{q(\x_{t-1}\mid\x_t,\x_0)}{p_\theta(\x_{t-1}\mid\x_t)} \;-\; \log p_\theta(\x_0\mid\x_1)\ \right] \]</div>
+          <p class="wy">Collect everything. The $\log q(\x_1\mid\x_0)$ pieces cancel exactly; $-\log p(\x_T)+\log q(\x_T\mid\x_0)$ becomes the first ratio; the denominators flip to put $q$ on top.</p></li>
+        <li><div class="ln">\[ \E_q\!\left[\log\frac{q(\x_T\mid\x_0)}{p(\x_T)}\right] = \E_{\x_0}\,\KL\!\big(q(\x_T\mid\x_0)\,\|\,p(\x_T)\big) \]</div>
+          <p class="wy"><b>Recognize the KL.</b> The integrand depends only on $\x_T$; marginalizing the rest of $q$ leaves $\x_T\sim q(\x_T\mid\x_0)$, and $\E_{q(\x_T\mid\x_0)}[\log(q/p)]$ <em>is</em> a KL by definition. Likewise each middle term becomes $\E_{q(\x_t,\x_0)}\KL(q(\x_{t-1}\mid\x_t,\x_0)\,\|\,p_\theta(\x_{t-1}\mid\x_t))$.</p></li>
+      </ol>
+      <div class="eqbox key">\[ -L = \E_q\Big[\ \underbrace{\fwd{\KL\!\big(q(\x_T\mid\x_0)\,\|\,p(\x_T)\big)}}_{L_T}\ +\ \sum_{t=2}^{T}\underbrace{\rev{\KL\!\big(q(\x_{t-1}\mid\x_t,\x_0)\,\|\,p_\theta(\x_{t-1}\mid\x_t)\big)}}_{L_{t-1}}\ \underbrace{-\ \log p_\theta(\x_0\mid\x_1)}_{L_0}\ \Big] \]</div>
+
+      <div class="terms">
+        <div class="term t-prior">
+          <div class="tt"><span class="name" style="color:var(--fwd)">$L_T$ — prior matching</span><span class="pill fixed">NOT trained</span></div>
+          <p class="exp">Does the forward chain end where sampling begins? <b>No parameters</b> — both sides fixed. We <em>enforce</em> it via the schedule, not learn it. Detail in <a href="#prior" class="ref">§6</a>.</p></div>
+        <div class="term t-train">
+          <div class="tt"><span class="name" style="color:var(--rev)">$L_{t-1}$ — denoising matching</span><span class="pill learn">TRAINED · the whole job</span></div>
+          <p class="exp">Match the model kernel $p_\theta(\x_{t-1}\mid\x_t)$ to the <b>true</b> reverse step $q(\x_{t-1}\mid\x_t,\x_0)$, which is a tractable Gaussian (<a href="#posterior" class="ref">§7</a>). This is the <b>only</b> place $\theta$ appears — everything downstream is this term simplified.</p></div>
+        <div class="term t-rec">
+          <div class="tt"><span class="name" style="color:var(--good)">$L_0$ — reconstruction</span><span class="pill dec">decoder</span></div>
+          <p class="exp">The final step back to discrete (e.g. 8-bit) pixel data, handled by a dedicated decoder. A boundary term that folds into the $t=1$ case; it does not affect the core $\eps$-loss.</p></div>
+      </div>
+    </section>
+
+    <!-- 6 PRIOR -->
+    <section id="prior">
+      <p class="kicker"><span class="num">6</span> The term we only enforce</p>
+      <h2>Why $L_T$ is a constraint, not a lesson</h2>
+      <p>Look hard at $L_T=\KL\!\big(q(\x_T\mid\x_0)\,\|\,p(\x_T)\big)$. From <a href="#marginal" class="ref">§2</a>, the left side is $q(\x_T\mid\x_0)=\N(\sqrt{\ab_T}\,\x_0,(1-\ab_T)\Id)$, fixed by the schedule; the right side is $p(\x_T)=\N(\mathbf 0,\Id)$, fixed by us. <strong>No $\theta$ appears anywhere</strong> — gradient descent cannot touch it.</p>
+      <p>So what is it doing in the loss? It is a self-consistency requirement. Sampling starts by drawing $\x_T\sim\N(\mathbf 0,\Id)$; that is only sensible if the forward process genuinely delivers data <em>to</em> that distribution. As $\ab_T\to 0$ (guaranteed because each $\alpha_s\lt 1$ and they multiply), the mean $\sqrt{\ab_T}\,\x_0\to\mathbf 0$ and the covariance $(1-\ab_T)\Id\to\Id$, so $q(\x_T\mid\x_0)\to\N(\mathbf 0,\Id)$ and $L_T\to 0$.</p>
+      <div class="call f"><p class="h"><span class="badge" style="background:var(--fwd)">✓</span> The confirmation</p>
+        <p>$L_T$ tells us the forward chain must terminate in the same random distribution we sample from — and <strong>we do not learn this, we enforce it</strong> by choosing a schedule that drives $\ab_T\approx 0$. Carrying no parameters and being $\approx 0$ by construction, it is simply <strong>dropped</strong> from the training loss. A design constraint wearing the costume of a loss term.</p></div>
+    </section>
+
+    <!-- 7 POSTERIOR -->
+    <section id="posterior">
+      <p class="kicker"><span class="num">7</span> The target the model chases</p>
+      <h2>The true reverse step is a tractable Gaussian</h2>
+      <p>Inside $L_{t-1}$ sits $q(\x_{t-1}\mid\x_t,\x_0)$ — the reverse step <em>when we are allowed to peek at $\x_0$</em>. Bayes' rule combines two Gaussians we already have; completing the square gives a Gaussian with a mean and variance we can read off explicitly. Here is the full computation.</p>
+      <ol class="steps">
+        <li><div class="ln">\[ q(\x_{t-1}\mid\x_t,\x_0) = \frac{q(\x_t\mid\x_{t-1})\,q(\x_{t-1}\mid\x_0)}{q(\x_t\mid\x_0)} \ \propto\ q(\x_t\mid\x_{t-1})\,q(\x_{t-1}\mid\x_0) \]</div>
+          <p class="wy">Bayes; the denominator is constant in $\x_{t-1}$, so drop it and restore normalization at the end. Both factors are known Gaussians ($q(\x_t\mid\x_{t-1},\x_0)=q(\x_t\mid\x_{t-1})$ by Markov).</p></li>
+        <li><div class="ln">\[ \propto \exp\!\left(-\half\!\left[\frac{(\x_t-\sqrt{\alpha_t}\,\x_{t-1})^2}{\beta_t} + \frac{(\x_{t-1}-\sqrt{\ab_{t-1}}\,\x_0)^2}{1-\ab_{t-1}}\right]\right) \]</div>
+          <p class="wy">Write out both Gaussian exponents. (Per-coordinate; the covariances are isotropic so we treat one dimension and the rest follow identically.)</p></li>
+        <li><div class="ln">\[ = \exp\!\left(-\half\!\left[\Big(\tfrac{\alpha_t}{\beta_t}+\tfrac{1}{1-\ab_{t-1}}\Big)\x_{t-1}^2 -2\Big(\tfrac{\sqrt{\alpha_t}}{\beta_t}\x_t + \tfrac{\sqrt{\ab_{t-1}}}{1-\ab_{t-1}}\x_0\Big)\x_{t-1} + C\Big)\right] \]</div>
+          <p class="wy">Expand the squares and collect powers of $\x_{t-1}$. $C$ gathers terms independent of $\x_{t-1}$ (absorbed by normalization).</p></li>
+        <li><div class="ln">\[ \frac{1}{\tilde\beta_t} := \frac{\alpha_t}{\beta_t}+\frac{1}{1-\ab_{t-1}} = \frac{\alpha_t(1-\ab_{t-1})+\beta_t}{\beta_t(1-\ab_{t-1})} = \frac{1-\ab_t}{\beta_t(1-\ab_{t-1})} \]</div>
+          <p class="wy"><b>Variance.</b> A Gaussian $\propto\exp(-\tfrac{1}{2\tilde\beta_t}(\x_{t-1}-\tilde\mu_t)^2)$ has precision $=$ the $\x_{t-1}^2$ coefficient. The numerator simplifies using $\beta_t=1-\alpha_t$ and $\alpha_t\ab_{t-1}=\ab_t$: $\ \alpha_t(1-\ab_{t-1})+\beta_t = \alpha_t-\ab_t+1-\alpha_t = 1-\ab_t$.</p></li>
+        <li><div class="ln">\[ \fwd{\tilde\beta_t = \frac{1-\ab_{t-1}}{1-\ab_t}\,\beta_t}, \qquad \tilde\mu_t = \tilde\beta_t\!\left(\frac{\sqrt{\alpha_t}}{\beta_t}\x_t + \frac{\sqrt{\ab_{t-1}}}{1-\ab_{t-1}}\x_0\right) \]</div>
+          <p class="wy"><b>Mean.</b> For a Gaussian, $\tilde\mu_t = (\text{precision})^{-1}\times(\text{linear coefficient})$. Substitute the linear coefficient from step 3.</p></li>
+        <li><div class="ln">\[ \rev{\tilde\mu_t(\x_t,\x_0) = \frac{\sqrt{\ab_{t-1}}\,\beta_t}{1-\ab_t}\,\x_0 + \frac{\sqrt{\alpha_t}\,(1-\ab_{t-1})}{1-\ab_t}\,\x_t} \]</div>
+          <p class="wy">Plug $\tilde\beta_t$ into step 5 and simplify each coefficient. This is DDPM Eq. (7).</p></li>
+      </ol>
+      <div class="eqbox key">\[ q(\x_{t-1}\mid\x_t,\x_0) = \N\!\big(\x_{t-1};\ \rev{\tilde\mu_t(\x_t,\x_0)},\ \fwd{\tilde\beta_t}\,\Id\big). \]<span class="tag">tractable posterior</span></div>
+      <p>This is the crux of the construction. The reverse step in general is <em>not</em> tractable — but conditioned on $\x_0$ it becomes an <em>exact</em> Gaussian. That is why $L_{t-1}$ is a KL between two Gaussians and not something hopeless. Our model $p_\theta$ sees only $\x_t$ (no $\x_0$), so its job is to reproduce this mean using $\x_t$ and $t$ alone.</p>
+    </section>
+
+    <!-- 8 GAUSSIAN -->
+    <section id="gauss">
+      <p class="kicker"><span class="num">8</span> A question that deserves care</p>
+      <h2>Why is it legitimate to make $p_\theta$ Gaussian?</h2>
+      <p>Here is the subtlety that makes this worth a whole section. In <a href="#posterior" class="ref">§7</a> we <em>did</em> prove a Gaussian — but it was $q(\x_{t-1}\mid\x_t,\x_0)$, conditioned on $\x_0$. At generation time the sampler never has $\x_0$. So there are <strong>two different reverse distributions</strong>, and it matters which one each part of the pipeline uses:</p>
+      <div class="terms">
+        <div class="term t-train">
+          <div class="tt"><span class="name" style="color:var(--rev)">Training target</span><span class="pill learn">what the loss compares against</span></div>
+          <p class="exp">$L_{t-1}=\KL\big(q(\x_{t-1}\mid\x_t,\x_0)\,\|\,p_\theta(\x_{t-1}\mid\x_t)\big)$. The left argument is the $\x_0$-<b>conditioned</b> posterior — <b>exactly Gaussian</b> by <a href="#posterior" class="ref">§7</a>.</p></div>
+        <div class="term t-warn">
+          <div class="tt"><span class="name" style="color:var(--warn)">Sampling target</span><span class="pill warn">what the trained model must stand in for</span></div>
+          <p class="exp">At generation the network must invert $q(\x_{t-1}\mid\x_t)$ — the <b>marginal</b> reverse, with no $\x_0$. This one is <b>generally non-Gaussian</b>. Whether a Gaussian $p_\theta$ suffices is the real question.</p></div>
+      </div>
+
+      <h3>Fact 1 — during training there is no approximation at all</h3>
+      <p>Read the training target again. The loss $L_{t-1}$ asks $p_\theta(\x_{t-1}\mid\x_t)$ to match $q(\x_{t-1}\mid\x_t,\x_0)$, and <a href="#posterior" class="ref">§7</a> showed that object is <em>exactly</em> $\N(\tilde\mu_t,\tilde\beta_t\Id)$. A Gaussian $p_\theta$ has precisely the right functional form to drive this KL to zero — we are matching a Gaussian <em>with</em> a Gaussian. So the Gaussian assumption costs <strong>nothing</strong> in the objective we actually optimize; there is no non-Gaussian target being crudely approximated. That is Fact 1, and it is airtight. The genuine question lives on the sampling side.</p>
+
+      <h3>Fact 2 — at sampling time the marginal reverse <em>is</em> Gaussian, to $O(\beta_t^{3/2})$</h3>
+      <p>The distribution the sampler must invert is, by Bayes with the true marginals $q(\x_{t-1})$ and $q(\x_t)$ (the data density pushed $t-1$ and $t$ steps forward),</p>
+      <div class="eqbox">\[ q(\x_{t-1}\mid\x_t) = \frac{q(\x_t\mid\x_{t-1})\,q(\x_{t-1})}{q(\x_t)}. \]</div>
+      <p>Because $q(\x_{t-1})$ is multimodal, this is not Gaussian in general. The claim to prove (Feller 1949; used by Sohl-Dickstein et&nbsp;al. 2015) is that <strong>it becomes Gaussian as $\beta_t\to 0$</strong>. We show it by a short-step (Laplace) expansion, keeping careful track of orders. Fix $\x_t$ and write $\u=\x_{t-1}-\x_t$.</p>
+      <ol class="steps">
+        <li><div class="ln">\[ \log q(\x_{t-1}\mid\x_t) = \log q(\x_t\mid\x_{t-1}) + \log q(\x_{t-1}) + \text{const}(\x_{t-1}) \]</div>
+          <p class="wy">Take logs of the Bayes expression. The $-\log q(\x_t)$ term is constant in $\x_{t-1}$, so it only fixes normalization.</p></li>
+        <li><div class="ln">\[ \log q(\x_t\mid\x_{t-1}) = -\frac{\|\x_t-\sqrt{1-\beta_t}\,\x_{t-1}\|^2}{2\beta_t} = -\frac{\|\u\|^2}{2\beta_t} + \tfrac{1}{2}\,\x_t^\top\u + O(\beta_t) \]</div>
+          <p class="wy"><b>The forward kernel concentrates $\x_{t-1}$.</b> Substitute $\x_{t-1}=\x_t+\u$ and $\sqrt{1-\beta_t}=1-\tfrac{\beta_t}{2}+O(\beta_t^2)$, then expand. The dominant term $-\|\u\|^2/2\beta_t$ is an isotropic Gaussian in $\u$ of variance $\beta_t$, so <b>all the mass sits within an $O(\sqrt{\beta_t})$ ball</b> of $\x_t$: under $q(\x_{t-1}\mid\x_t)$, typical $\u=O(\sqrt{\beta_t})$.</p></li>
+        <li><div class="ln">\[ \log q(\x_{t-1}) = \log q(\x_t+\u) = \log q(\x_t) + \s^\top\u + \tfrac{1}{2}\u^\top H\u + \tfrac{1}{6}T[\u,\u,\u] + O(\|\u\|^4) \]</div>
+          <p class="wy"><b>Taylor-expand the smooth factor.</b> Because $\u$ only ranges over that tiny $O(\sqrt{\beta_t})$ ball, we may expand the slowly-varying data marginal $q(\x_{t-1})$ around $\x_t$. Here $\s=\nabla\log q(\x_t)$ is the <b>score</b>, $H=\nabla^2\log q(\x_t)$ the Hessian, and $T$ the third-derivative tensor — all fixed properties of the data density, so all $O(1)$ in $\beta_t$.</p></li>
+        <li><div class="ln">\[ \log q(\x_{t-1}\mid\x_t) = \underbrace{-\frac{\|\u\|^2}{2\beta_t}}_{O(1)} \;+\; \underbrace{\big(\tfrac{1}{2}\x_t+\s\big)^{\!\top}\!\u}_{O(\beta_t^{1/2})} \;+\; \underbrace{\tfrac{1}{2}\u^\top H\u}_{O(\beta_t)} \;+\; \underbrace{\tfrac{1}{6}T[\u,\u,\u]}_{O(\beta_t^{3/2})} \;+\;\cdots \]</div>
+          <p class="wy"><b>Add and count orders</b> at the typical scale $\u=O(\sqrt{\beta_t})$: the leading quadratic is $O(1)$; the linear term $O(\beta_t^{1/2})$; the Hessian's quadratic term $O(\beta_t)$; the cubic term $O(\beta_t^{3/2})$; and so on.</p></li>
+        <li><div class="ln">\[ q(\x_{t-1}\mid\x_t) = \N\!\Big(\x_t+\beta_t\,\nabla\log q(\x_t),\ \ \beta_t\Id\Big)\cdot\Big(1+O(\beta_t^{3/2})\Big) \]</div>
+          <p class="wy"><b>Read it off.</b> Every term through <em>second</em> order in $\u$ is quadratic in the exponent — and a quadratic exponent <em>is</em> exactly a Gaussian. Completing the square on the $O(1)$ and $O(\beta_t^{1/2})$ pieces gives mean $\x_t+\beta_t(\tfrac12\x_t+\s)\approx\x_t+\beta_t\nabla\log q(\x_t)$; the Hessian term perturbs the covariance to $\beta_t\Id+O(\beta_t^2)$. The <b>first term a Gaussian cannot capture is the cubic</b>, of size $O(\beta_t^{3/2})$. As $\beta_t\to 0$ it vanishes.</p></li>
+      </ol>
+      <p><strong>That is the proof, not a hand-wave:</strong> the reverse conditional's log-density is quadratic (hence Gaussian) up to a cubic correction that shrinks like $\beta_t^{3/2}$. Take a big step and $\beta_t$ (or the effective gap) is $O(1)$, the cubic and higher terms are no longer small, and the true conditional is genuinely multimodal — a single Gaussian then fits it badly. Keep the steps small and the Gaussian is asymptotically exact.</p>
+
+      <div class="call q"><p class="h"><span class="badge" style="background:var(--rev)">→</span> Two things fall out of this</p>
+        <p><strong>(1) It forces many small steps.</strong> The Gaussian reverse model is justified <em>only</em> in the small-$\beta_t$ regime, which is exactly why sampling marches one small step at a time (<a href="#steps" class="ref">§12</a>) — and the constraint DDIM (<a href="#ddim" class="ref">§13</a>) later renegotiates. <strong>(2) It reveals the score.</strong> The optimal Gaussian mean is $\x_t+\beta_t\,\nabla\log q(\x_t)$ — the current point nudged along the <em>score</em> of the data density. That is precisely what $\eps_\theta$ learns: from the marginal $\x_t=\sqrt{\ab_t}\x_0+\sqrt{1-\ab_t}\eps$ one has $\nabla\log q(\x_t)=-\eps/\sqrt{1-\ab_t}$ in expectation, so predicting $\eps$ (<a href="#eps" class="ref">§10</a>) and predicting the score are the same task up to scale — the bridge to score-based generative models.</p></div>
+    </section>
+
+    <!-- 9 MSE -->
+    <section id="mse">
+      <p class="kicker"><span class="num">9</span> KL collapses</p>
+      <h2>A KL between two Gaussians is a mean-matching MSE</h2>
+      <p>The standard simplification: <strong>do not learn the reverse variance</strong>. Fix $\Sigma_\theta=\sigma_t^2\Id$ to a schedule constant (DDPM uses $\sigma_t^2=\beta_t$ or $\tilde\beta_t$; either works). When two Gaussians share the same covariance, their KL is just the squared distance between their means. Full derivation from the general Gaussian KL:</p>
+      <ol class="steps">
+        <li><div class="ln">\[ \KL\!\big(\N(\mu_1,\Sigma_1)\,\|\,\N(\mu_2,\Sigma_2)\big) = \half\!\left[\log\frac{|\Sigma_2|}{|\Sigma_1|} - d + \operatorname{tr}(\Sigma_2^{-1}\Sigma_1) + (\mu_1-\mu_2)^\top\Sigma_2^{-1}(\mu_1-\mu_2)\right] \]</div>
+          <p class="wy">The general closed form for the KL between two $d$-dimensional Gaussians.</p></li>
+        <li><div class="ln">\[ \Sigma_1=\Sigma_2=\Sigma \ \Rightarrow\ \log\frac{|\Sigma|}{|\Sigma|}=0,\quad \operatorname{tr}(\Sigma^{-1}\Sigma)=\operatorname{tr}(\Id)=d \ \Rightarrow\ \KL = \half(\mu_1-\mu_2)^\top\Sigma^{-1}(\mu_1-\mu_2) \]</div>
+          <p class="wy"><b>Equal covariances</b> kill the log-det ($=0$) and cancel the trace against $-d$. Only the Mahalanobis mean gap survives.</p></li>
+        <li><div class="ln">\[ \Sigma=\sigma_t^2\Id \ \Rightarrow\ \KL = \frac{1}{2\sigma_t^2}\,\|\mu_1-\mu_2\|^2 \]</div>
+          <p class="wy">Isotropic covariance turns the quadratic form into a plain scaled squared norm.</p></li>
+      </ol>
+      <p>Applying this to $L_{t-1}=\KL\!\big(q(\x_{t-1}\mid\x_t,\x_0)\,\|\,p_\theta(\x_{t-1}\mid\x_t)\big)$ with means $\tilde\mu_t$ and $\mu_\theta$:</p>
+      <div class="eqbox key">\[ L_{t-1} = \E_q\!\left[\frac{1}{2\sigma_t^2}\,\big\|\,\rev{\tilde\mu_t(\x_t,\x_0)} - \rev{\mu_\theta(\x_t,t)}\,\big\|^2\right] + C. \]</div>
+      <p>The grand KL objective is now an ordinary regression: make the network's predicted mean land on the true posterior mean. $C$ collects $\theta$-independent constants.</p>
+    </section>
+
+    <!-- 10 EPS -->
+    <section id="eps">
+      <p class="kicker"><span class="num">10</span> The pivot to noise prediction</p>
+      <h2>Reparameterize the mean — predict $\eps$, not $\mu$</h2>
+      <p>We could ask the network to output $\mu_\theta$ directly, but a change of variables makes the target dramatically simpler. From the forward marginal (<a href="#marginal" class="ref">§2</a>), invert to express $\x_0$ through the noise that produced $\x_t$: $\ \x_0 = \tfrac{1}{\sqrt{\ab_t}}\big(\x_t - \sqrt{1-\ab_t}\,\eps\big)$. Substitute into $\tilde\mu_t$.</p>
+      <ol class="steps">
+        <li><div class="ln">\[ \tilde\mu_t = \frac{\sqrt{\ab_{t-1}}\,\beta_t}{1-\ab_t}\cdot\frac{\x_t-\sqrt{1-\ab_t}\,\eps}{\sqrt{\ab_t}} + \frac{\sqrt{\alpha_t}(1-\ab_{t-1})}{1-\ab_t}\,\x_t \]</div>
+          <p class="wy">Insert $\x_0$ into the posterior mean from <a href="#posterior" class="ref">§7</a>, step 6.</p></li>
+        <li><div class="ln">\[ \text{coeff. of }\x_t:\ \ \frac{\beta_t}{(1-\ab_t)\sqrt{\alpha_t}} + \frac{\sqrt{\alpha_t}(1-\ab_{t-1})}{1-\ab_t} = \frac{\beta_t + \alpha_t(1-\ab_{t-1})}{\sqrt{\alpha_t}(1-\ab_t)} = \frac{1-\ab_t}{\sqrt{\alpha_t}(1-\ab_t)} = \frac{1}{\sqrt{\alpha_t}} \]</div>
+          <p class="wy">Use $\sqrt{\ab_{t-1}}/\sqrt{\ab_t}=1/\sqrt{\alpha_t}$, then the same identity $\beta_t+\alpha_t(1-\ab_{t-1})=1-\ab_t$ from <a href="#posterior" class="ref">§7</a>.</p></li>
+        <li><div class="ln">\[ \text{coeff. of }\eps:\ \ -\frac{\beta_t}{(1-\ab_t)\sqrt{\alpha_t}}\cdot\sqrt{1-\ab_t} = -\frac{\beta_t}{\sqrt{\alpha_t}\,\sqrt{1-\ab_t}} \]</div>
+          <p class="wy">Collect the $\eps$ term and simplify $\sqrt{1-\ab_t}/(1-\ab_t)=1/\sqrt{1-\ab_t}$.</p></li>
+        <li><div class="ln">\[ \therefore\quad \tilde\mu_t = \frac{1}{\sqrt{\alpha_t}}\!\left(\x_t - \frac{\beta_t}{\sqrt{1-\ab_t}}\,\eps\right) \]</div>
+          <p class="wy">A strikingly tidy form: the only unknown on the right is the noise $\eps$ that generated $\x_t$.</p></li>
+      </ol>
+      <p>So let the network <strong>predict that noise</strong>, $\eps_\theta(\x_t,t)$, and define $\mu_\theta$ to mirror the formula exactly:</p>
+      <div class="eqbox">\[ \rev{\mu_\theta(\x_t,t) = \frac{1}{\sqrt{\alpha_t}}\!\left(\x_t - \frac{\beta_t}{\sqrt{1-\ab_t}}\,\eps_\theta(\x_t,t)\right)}. \]</div>
+      <p>Now the mean difference is <em>just</em> a scaled noise difference, and the squared error follows immediately:</p>
+      <ol class="steps">
+        <li><div class="ln">\[ \tilde\mu_t - \mu_\theta = \frac{\beta_t}{\sqrt{\alpha_t}\,\sqrt{1-\ab_t}}\big(\eps - \eps_\theta(\x_t,t)\big) \]</div>
+          <p class="wy">The $\x_t$ terms are identical in both means and cancel; only the noise gap remains, times a constant.</p></li>
+        <li><div class="ln">\[ L_{t-1} = \E_{\x_0,\eps}\!\left[\ \frac{\beta_t^2}{2\sigma_t^2\,\alpha_t\,(1-\ab_t)}\ \big\|\,\eps - \eps_\theta(\underbrace{\sqrt{\ab_t}\,\x_0+\sqrt{1-\ab_t}\,\eps}_{=\,\x_t},\,t)\big\|^2\ \right] \]</div>
+          <p class="wy">Square the constant and divide by $2\sigma_t^2$ (from <a href="#mse" class="ref">§9</a>). We generate $\x_t$ by the one-shot jump, so the whole term is an expectation over data $\x_0$ and a fresh noise $\eps$.</p></li>
+      </ol>
+      <div class="call q"><p class="h"><span class="badge" style="background:var(--rev)">✓</span> The entire training loop, in one line</p>
+        <p>Sample $\x_0$ from data, sample $\eps\sim\N(\mathbf 0,\Id)$, form $\x_t=\sqrt{\ab_t}\,\x_0+\sqrt{1-\ab_t}\,\eps$, and train the network to <strong>recover the noise you added</strong>. The colored prefactor is a per-timestep weight — the subject of <a href="#weight" class="ref">§11</a>.</p></div>
+    </section>
+
+    <!-- 11 WEIGHT -->
+    <section id="weight">
+      <p class="kicker"><span class="num">11</span> A modeling choice</p>
+      <h2>Keep the weight, or drop it?</h2>
+      <p>The weighted term above is the honest ELBO. DDPM famously observed that <strong>setting the weight to $1$</strong> — training on plain $\|\eps-\eps_\theta\|^2$ — trains more stably and produces better samples. Both are defensible; they optimize different things.</p>
+      <div class="tabs">
+        <div class="tabbar" role="tablist">
+          <button class="on" data-tab="drop" role="tab">Drop it → $L_\text{simple}$</button>
+          <button data-tab="keep" role="tab">Keep it → true bound</button>
+        </div>
+        <div class="tabpane on" id="tab-drop">
+          <div class="eqbox key">\[ L_\text{simple} = \E_{t,\,\x_0,\,\eps}\Big[\ \big\|\,\eps - \eps_\theta(\sqrt{\ab_t}\,\x_0+\sqrt{1-\ab_t}\,\eps,\ t)\big\|^2\ \Big]. \]</div>
+          <p><b>Why dropping the weight is legitimate.</b> For each fixed $t$, the weight $\lambda_t=\tfrac{\beta_t^2}{2\sigma_t^2\alpha_t(1-\ab_t)}$ is a positive constant that does <em>not</em> depend on $\theta$. It therefore cannot move the minimizer of that timestep's term — the best $\eps_\theta$ is the same with or without it. Dropping $\lambda_t$ only changes <em>how the timesteps are weighted relative to each other</em> in the total sum: a reweighting of the gradient across $t$, not the target at any $t$.</p>
+          <p><b>Why you might prefer to drop it.</b> The true $\lambda_t$ is large at small $t$ (easy, nearly-clean denoising) and small at large $t$ (hard, very-noisy denoising). Flattening it to $1$ <em>up-weights the hard, high-noise steps</em> — the ones that matter most for perceptual sample quality. A deliberate, beneficial reweighting.</p>
+        </div>
+        <div class="tabpane" id="tab-keep">
+          <div class="eqbox key">\[ L_\text{vlb} = \E_{\x_0}\!\Big[\,L_0 + \sum_{t=2}^{T}\lambda_t\,\|\eps-\eps_\theta\|^2 + L_T\,\Big],\qquad \lambda_t=\frac{\beta_t^2}{2\sigma_t^2\,\alpha_t\,(1-\ab_t)}. \]</div>
+          <p><b>Why keep the weight sometimes.</b> Only the weighted sum equals the negative ELBO, a genuine bound on $-\log p_\theta(\x_0)$. If you care about <strong>likelihood</strong> — bits/dim, comparing density models, anything where the number must be a valid log-likelihood bound — you need the exact $\lambda_t$. Drop it and $L_\text{simple}$ is a fine training surrogate but no longer bounds anything. (Improved-DDPM keeps a learned variance and these weights precisely to recover competitive likelihoods.)</p>
+        </div>
+      </div>
+      <div class="call q"><p class="h">The one-line rule</p>
+        <p><strong>Care about sample quality → drop the weight</strong> (use $L_\text{simple}$). <strong>Care about likelihood / a valid bound → keep it</strong> (use $L_\text{vlb}$). The optimum at each individual $t$ is identical either way; only the cross-$t$ balance changes.</p></div>
+    </section>
+
+    <!-- 12 STEPS -->
+    <section id="steps">
+      <p class="kicker"><span class="num">12</span> The sampler's constraint</p>
+      <h2>Why sampling marches $\x_t\to\x_{t-1}\to\x_{t-2}$, one small step at a time</h2>
+      <p>Why crawl through a thousand steps at generation time? Why not learn one big map $p(\x_{t-k}\mid\x_t)$ and leap? Two linked reasons, both already in the math.</p>
+      <h4>1 · A big reverse jump is not Gaussian</h4>
+      <p>Our entire model class is Gaussian reverse kernels, and <a href="#gauss" class="ref">§8</a> showed that is accurate only for <em>small</em> steps. The true multi-step reverse $q(\x_{t-k}\mid\x_t)$ integrates over many possible clean images and is sharply multimodal — a single Gaussian cannot represent it. Forcing one to fit averages across the modes, and its mean lands in low-density space (blurry, mode-averaged samples).</p>
+      <h4>2 · The forward jump needs $\x_0$, which the sampler lacks</h4>
+      <p>Yes, we can jump <em>forward</em> in one shot (<a href="#marginal" class="ref">§2</a>) — but that is $q(\x_t\mid\x_0)$, needing $\x_0$, the very thing we are trying to generate. Reversing requires marginalizing $\x_0$ out, which reintroduces the intractable multimodal integral. The small step is the price of not knowing $\x_0$.</p>
+      <div class="call f"><p class="h"><span class="badge" style="background:var(--fwd)">σ</span> The variance intuition, made precise</p>
+        <p>Each ancestral (DDPM) reverse step also <em>injects</em> fresh noise $\sigma_t\z$. Over many small steps this is fine; but cover the same ground in a few big <em>stochastic</em> jumps and the injected-noise variance per step dominates the signal correction — samples degrade. The way out is to <strong>remove the stochastic injection</strong>. That is precisely DDIM. →</p></div>
+    </section>
+
+    <!-- 13 DDIM -->
+    <section id="ddim">
+      <p class="kicker"><span class="num">13</span> Escaping the step count</p>
+      <h2>DDIM: same training, deterministic sampling, big skips</h2>
+      <p>The realization DDIM (Song et&nbsp;al., 2021) is built on: look back at $L_\text{simple}$ — it depends on $q$ <strong>only through the marginals $q(\x_t\mid\x_0)$</strong>. It never references the fact that the forward chain is Markov. So <em>any</em> forward process with the same marginals induces the same objective — and reuses the same trained $\eps_\theta$.</p>
+      <p>DDIM exploits this with a <strong>non-Markovian</strong> forward family, indexed by a free noise level $\sigma_t\ge 0$, defined by its posterior:</p>
+      <div class="eqbox key">\[ q_\sigma(\x_{t-1}\mid\x_t,\x_0) = \N\!\left(\ \sqrt{\ab_{t-1}}\,\x_0 + \sqrt{1-\ab_{t-1}-\sigma_t^2}\cdot\frac{\x_t - \sqrt{\ab_t}\,\x_0}{\sqrt{1-\ab_t}},\ \ \sigma_t^2\Id\ \right). \]</div>
+
+      <h3>Proof that the marginals are preserved</h3>
+      <p>The family is engineered so that $q_\sigma(\x_t\mid\x_0)=\N(\sqrt{\ab_t}\,\x_0,(1-\ab_t)\Id)$ for <em>every</em> $\sigma$ — identical to DDPM. We verify by induction (Song et&nbsp;al., Lemma&nbsp;1): assume it holds at step $t$; propagate one step down.</p>
+      <ol class="steps">
+        <li><div class="ln">\[ q_\sigma(\x_{t-1}\mid\x_0) = \int q_\sigma(\x_{t-1}\mid\x_t,\x_0)\,q_\sigma(\x_t\mid\x_0)\,d\x_t \]</div>
+          <p class="wy">Marginalize $\x_t$. Both factors are Gaussian and the mean of the first is affine in $\x_t$, so the result is Gaussian — we just need its mean and variance.</p></li>
+        <li><div class="ln">\[ \E[\x_{t-1}] = \sqrt{\ab_{t-1}}\,\x_0 + \sqrt{1-\ab_{t-1}-\sigma_t^2}\cdot\frac{\E[\x_t]-\sqrt{\ab_t}\,\x_0}{\sqrt{1-\ab_t}} = \sqrt{\ab_{t-1}}\,\x_0 \]</div>
+          <p class="wy"><b>Mean.</b> By hypothesis $\E[\x_t]=\sqrt{\ab_t}\,\x_0$, so the second term's numerator vanishes. Correct mean.</p></li>
+        <li><div class="ln">\[ \operatorname{Var}[\x_{t-1}] = \Big(\underbrace{\tfrac{1-\ab_{t-1}-\sigma_t^2}{1-\ab_t}}_{c^2}\Big)\underbrace{(1-\ab_t)}_{\operatorname{Var}[\x_t]} + \sigma_t^2 = (1-\ab_{t-1}-\sigma_t^2) + \sigma_t^2 = 1-\ab_{t-1} \]</div>
+          <p class="wy"><b>Variance.</b> Propagate $\operatorname{Var}[\x_t]=1-\ab_t$ through the coefficient $c$, then add the kernel's own $\sigma_t^2$. The $\sigma_t^2$ terms cancel exactly — <em>this is why the $\sqrt{1-\ab_{t-1}-\sigma_t^2}$ coefficient is chosen precisely so</em>.</p></li>
+        <li><div class="ln">\[ \therefore\quad q_\sigma(\x_{t-1}\mid\x_0) = \N\!\big(\sqrt{\ab_{t-1}}\,\x_0,\ (1-\ab_{t-1})\Id\big) \quad\checkmark \]</div>
+          <p class="wy">Same form one step down — induction closes. The marginals are identical to DDPM for all $\sigma$, so <b>the same $\eps_\theta$ trained under $L_\text{simple}$ is valid without retraining.</b></p></li>
+      </ol>
+
+      <h3>The sampling update</h3>
+      <p>At inference we do not have $\x_0$, so we <em>estimate</em> it from the current noise prediction (invert the marginal), then step via $q_\sigma$:</p>
+      <div class="eqbox">\[ \good{\hat\x_0(\x_t,t)} = \frac{\x_t - \sqrt{1-\ab_t}\,\eps_\theta(\x_t,t)}{\sqrt{\ab_t}}, \]</div>
+      <div class="eqbox key">\[ \x_{t-1} = \sqrt{\ab_{t-1}}\,\good{\hat\x_0} + \sqrt{1-\ab_{t-1}-\sigma_t^2}\;\eps_\theta(\x_t,t) + \sigma_t\,\z,\qquad \z\sim\N(\mathbf 0,\Id). \]</div>
+      <p>The single knob $\sigma_t$ interpolates between two known samplers:</p>
+      <ul class="clean">
+        <li>Set $\sigma_t = \sqrt{\tfrac{1-\ab_{t-1}}{1-\ab_t}}\sqrt{1-\tfrac{\ab_t}{\ab_{t-1}}} = \sqrt{\tilde\beta_t}$ and you <strong>recover ancestral DDPM sampling</strong> exactly — fully stochastic.</li>
+        <li>Set $\sigma_t = 0$ and the reverse step becomes <strong>fully deterministic</strong> — the $\sigma_t\z$ term vanishes. This is DDIM.</li>
+      </ul>
+      <p>With $\sigma_t=0$, the update reads: predict a clean image, then re-noise it to the previous level using the <em>same</em> $\eps_\theta$, no random $\z$:</p>
+      <div class="eqbox key">\[ \x_{t-1} = \sqrt{\ab_{t-1}}\,\good{\hat\x_0} + \sqrt{1-\ab_{t-1}}\;\eps_\theta(\x_t,t). \]</div>
+
+      <h3>Why this lets you skip steps</h3>
+      <p>Determinism turns sampling into solving an <strong>ordinary differential equation</strong> (the probability-flow ODE) rather than a stochastic one. There is no fresh noise accumulating, so the trajectory is smooth and a numerical solver can take <em>large</em> steps and still land near the exact solution. Concretely, pick any increasing sub-sequence $\tau_1\lt\dots\lt\tau_S$ of $\{1,\dots,T\}$ and apply the update between consecutive $\tau$'s (replacing the $t,t-1$ indices by $\tau_i,\tau_{i-1}$). Because the network is reused unchanged, <strong>you train once at $T=1000$ and sample in 20–50 steps.</strong></p>
+
+      <div class="call q"><p class="h"><span class="badge" style="background:var(--rev)">?</span> Yes — do we actually skip steps? (a common point of confusion)</p>
+        <p><strong>Yes, and the original DDIM paper is where it comes from.</strong> Keep two separate ideas apart:</p>
+        <ul class="clean" style="margin-top:6px">
+          <li><strong>DDPM</strong> (Ho, Jain &amp; Abbeel, 2020) runs the <em>full</em> chain — all $T=1000$ reverse steps, one at a time (ancestral sampling). It does <em>not</em> skip. That is why it is slow.</li>
+          <li><strong>DDIM</strong> (Song, Meng &amp; Ermon, ICLR 2021) <em>introduces</em> skipping, in its <strong>§4.2 “Accelerated Generation Processes.”</strong> Since the loss only depends on the marginals (proved just above), the sampler can be defined on any sub-sequence $\tau_1\lt\dots\lt\tau_S \subsetneq \{1,\dots,T\}$ and jump between those timesteps. Their experiments run $S \in \{10,20,50,100\}$ and report, e.g., CIFAR-10 FID $\approx 4.67$ at $50$ steps vs $4.04$ at $1000$ — essentially unchanged — while stochastic DDPM degrades sharply at the same low step counts.</li>
+        </ul>
+        <p style="margin-bottom:0"><strong>Two distinct axes.</strong> <em>Skipping</em> (the sub-sequence $\tau$) is the actual speedup, and it is <em>enabled</em> by marginal-preservation. <em>Determinism</em> ($\sigma_t=0$) is what makes those big skips <em>accurate</em>. You can technically skip with stochastic sampling too, but the injected noise (<a href="#steps" class="ref">§12</a>) makes few-step stochastic sampling much worse — which is why DDIM pairs skipping with $\sigma_t=0$.</p></div>
+
+      <div class="ddim">
+        <div class="ends"><span>$\x_0$ (clean)</span><span>$\x_T$ (noise)</span></div>
+        <div class="track" id="ddtrack"><div class="line"></div></div>
+        <div style="margin-top:6px">
+          <div class="lab sans" style="font-size:13px;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:8px">
+            <span>sampling steps used</span><b style="color:var(--ink)"><span id="ddsteps">50</span> of 1000</b>
+          </div>
+          <input type="range" id="ddrange" min="5" max="1000" value="50" step="5" aria-label="Number of DDIM sampling steps">
+        </div>
+        <div class="stat">
+          <div class="s"><div class="v" id="ddspeed">20×</div><div class="l">faster than full DDPM</div></div>
+          <div class="s"><div class="v" id="ddstride">20</div><div class="l">timesteps skipped per jump</div></div>
+          <div class="s"><div class="v" style="color:var(--good)">σ=0</div><div class="l">deterministic — no injected noise</div></div>
+        </div>
+        <p class="cap sans">Each dot is a timestep the sampler actually visits; the gaps are skipped. DDPM must visit nearly all of them because its stochastic steps must stay small; DDIM's deterministic ODE tolerates the gaps. Toward <b>5 steps</b> the jumps get huge — fast, but the ODE is solved coarsely and detail suffers; toward <b>1000</b> you recover full fidelity at full cost.</p>
+      </div>
+    </section>
+
+    <!-- 14 TRADEOFF -->
+    <section id="tradeoff">
+      <p class="kicker"><span class="num">14</span> The honest accounting</p>
+      <h2>How we got to DDIM, the speedup, and what it costs</h2>
+      <p>Three pieces of one deliberate trade, laid side by side.</p>
+      <div class="terms">
+        <div class="term t-prior">
+          <div class="tt"><span class="name" style="color:var(--fwd)">Why we ended up at DDIM</span></div>
+          <p class="exp">DDPM sampling is <b>slow by construction</b>: the Gaussian reverse kernel is only accurate over tiny steps (<a href="#gauss" class="ref">§8</a>), and each stochastic step <b>injects fresh noise</b> $\sigma_t\z$. Try to cover the same ground in a few big stochastic jumps and that injected variance swamps the signal correction — samples fall apart (<a href="#steps" class="ref">§12</a>). The escape: the loss pins only the <b>marginals</b> $q(\x_t\mid\x_0)$, never the Markov joint — so we may swap in a different reverse process with the same marginals and the same $\eps_\theta$. That freedom is DDIM.</p></div>
+        <div class="term t-train">
+          <div class="tt"><span class="name" style="color:var(--rev)">Why it speeds things up</span><span class="pill learn">the win</span></div>
+          <p class="exp">Setting $\sigma_t=0$ removes the injected noise, so sampling is a <b>deterministic ODE</b> instead of an SDE. An ODE trajectory is <b>smooth</b> — the same clean-image estimate $\hat\x_0$ is repeatedly refined, not re-randomized — so a coarse solver lands close to the exact solution. Big skips no longer accumulate injected-noise variance because there <em>is</em> none. That is the whole speedup: <b>10–50× fewer network evaluations</b> for a comparable image.</p></div>
+        <div class="term t-warn">
+          <div class="tt"><span class="name" style="color:var(--warn)">Why it can cost quality</span><span class="pill warn">the trade</span></div>
+          <p class="exp">Two distinct costs. <b>(1) Discretization error:</b> with very few steps you solve the ODE coarsely, so the trajectory only <em>approximates</em> the true path and fine detail degrades as steps drop (a 5-step image is visibly worse than a 50-step one). <b>(2) Lost stochasticity:</b> the injected DDPM noise is not only harmful — it also <em>resamples</em>, letting the chain correct small errors and explore the full data distribution. Removing it makes generation a <b>deterministic map</b> from $\x_T$ to one image, slightly <b>reducing diversity</b> and, when you <em>can</em> afford many steps, giving marginally worse fidelity than fully-stochastic DDPM. The honest rule: <b>few steps → DDIM wins big; many steps → stochastic DDPM edges ahead.</b></p></div>
+      </div>
+      <div class="call f"><p class="h"><span class="badge" style="background:var(--fwd)">σ</span> The knob is continuous</p>
+        <p>Because $\sigma_t$ is a free parameter, DDIM and DDPM are the two ends of one dial, not rival algorithms. Turn $\sigma_t$ up toward $\sqrt{\tilde\beta_t}$ to buy back diversity and high-step fidelity; turn it to $0$ to buy speed and reproducibility (a fixed $\x_T$ always yields the same image — useful for interpolation and editing). You choose where on the speed ↔ quality/diversity trade to sit.</p></div>
+    </section>
+
+    <footer>
+      Self-contained page · math typeset with MathJax · color-coded by role — <span style="color:var(--fwd)">forward / fixed</span> vs <span style="color:var(--rev)">reverse / learned</span>.<br>
+      Derivation follows Sohl-Dickstein et&nbsp;al. (2015), <strong>Ho et&nbsp;al., DDPM (2020) — arXiv:2006.11239</strong>, Nichol &amp; Dhariwal (2021), and <strong>Song et&nbsp;al., DDIM (2021) — arXiv:2010.02502</strong> (step-skipping: their §4.2, “Accelerated Generation Processes”).
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var root=document.documentElement, btn=document.getElementById('themeBtn');
+  function cur(){var t=root.getAttribute('data-theme'); if(t)return t;
+    return window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
+  btn.addEventListener('click',function(){var n=cur()==='dark'?'light':'dark';root.setAttribute('data-theme',n);draw();});
+
+  var bar=document.getElementById('bar');
+  var links=Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+  var secs=links.map(function(a){return document.getElementById(a.getAttribute('href').slice(1));});
+  function onScroll(){
+    var st=window.scrollY||document.documentElement.scrollTop;
+    var h=document.documentElement.scrollHeight-window.innerHeight;
+    bar.style.width=(h>0?(st/h*100):0)+'%';
+    var idx=0, mid=st+window.innerHeight*0.32;
+    for(var i=0;i<secs.length;i++){ if(secs[i]&&secs[i].offsetTop<=mid) idx=i; }
+    links.forEach(function(a,i){a.classList.toggle('on',i===idx);});
+  }
+  window.addEventListener('scroll',onScroll,{passive:true});
+  window.addEventListener('resize',onScroll);
+
+  document.querySelectorAll('.tabbar button').forEach(function(b){
+    b.addEventListener('click',function(){
+      var t=b.getAttribute('data-tab');
+      b.parentNode.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b);});
+      document.getElementById('tab-drop').classList.toggle('on',t==='drop');
+      document.getElementById('tab-keep').classList.toggle('on',t==='keep');
+    });
+  });
+
+  // diffusion schedule
+  var T=1000, betaLo=1e-4, betaHi=0.02;
+  var abar=new Float64Array(T+1); abar[0]=1; var prod=1;
+  for(var t=1;t<=T;t++){ var beta=betaLo+(betaHi-betaLo)*(t-1)/(T-1); prod*=(1-beta); abar[t]=prod; }
+
+  // base image x0
+  var N=96, base=new Float64Array(N*N*3);
+  for(var y=0;y<N;y++)for(var x=0;x<N;x++){
+    var i=(y*N+x)*3, u=x/N, v=y/N, cx=u-0.5, cy=v-0.5, r=Math.sqrt(cx*cx+cy*cy);
+    var ring=0.5+0.5*Math.cos(r*26.0), band=0.5+0.5*Math.sin(u*9.0+v*4.0), glow=Math.max(0,1-r*1.8);
+    base[i]=255*(0.30+0.55*glow*ring);
+    base[i+1]=255*(0.28+0.45*band*(0.5+0.5*glow));
+    base[i+2]=255*(0.42+0.5*(1-ring)*0.7+0.2*band);
+  }
+  var cv=document.getElementById('cv'), ctx=cv.getContext('2d'), img=ctx.createImageData(N,N);
+  var trange=document.getElementById('trange');
+  function gauss(){ var u=1-Math.random(), w=Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*w); }
+  function clamp(v){return v<0?0:v>255?255:v;}
+  function draw(){
+    var t=+trange.value, ab=abar[t], sa=Math.sqrt(ab), sn=Math.sqrt(Math.max(0,1-ab)), d=img.data;
+    for(var p=0;p<N*N;p++){ var b=p*3, q=p*4;
+      d[q]=clamp(sa*base[b]+sn*gauss()*128);
+      d[q+1]=clamp(sa*base[b+1]+sn*gauss()*128);
+      d[q+2]=clamp(sa*base[b+2]+sn*gauss()*128); d[q+3]=255; }
+    ctx.putImageData(img,0,0);
+    document.getElementById('tval').textContent=t;
+    document.getElementById('ra').textContent=sa.toFixed(3);
+    document.getElementById('rb').textContent=sn.toFixed(3);
+    document.getElementById('rabar').textContent=ab<1e-4?ab.toExponential(2):ab.toFixed(4);
+    var snr=ab/(1-ab);
+    document.getElementById('rsnr').textContent = t===0?'∞':(snr>=100?snr.toFixed(0):snr.toFixed(2));
+  }
+  trange.addEventListener('input',draw);
+
+  // DDIM viz
+  var track=document.getElementById('ddtrack'), ddr=document.getElementById('ddrange');
+  function ddim(){
+    var S=+ddr.value, stride=Math.round(T/S);
+    track.querySelectorAll('.tick').forEach(function(n){n.remove();});
+    var shown=Math.min(S,120);
+    for(var k=0;k<=shown;k++){ var frac=k/shown, el=document.createElement('div');
+      el.className='tick'; el.style.left=(frac*100)+'%'; track.appendChild(el); }
+    document.getElementById('ddsteps').textContent=S;
+    document.getElementById('ddspeed').textContent=Math.max(1,Math.round(T/S))+'×';
+    document.getElementById('ddstride').textContent=stride;
+  }
+  ddr.addEventListener('input',ddim);
+
+  draw(); ddim(); onScroll();
+})();
+</script>
+
+<!-- ============ ASK-CLAUDE CHAT WIDGET ============ -->
+<button id="chatFab" aria-label="Ask Claude about the derivation"><span class="ico">✦</span> Ask Claude</button>
+<div id="chatPanel" role="dialog" aria-label="Ask Claude">
+  <div class="chat-head">
+    <div>
+      <div class="t"><span class="d"></span> Ask Claude</div>
+      <div class="sub" id="chatSub">Companion to this derivation · Opus 4.8</div>
+    </div>
+    <button id="chatClose" aria-label="Close chat">×</button>
+  </div>
+  <div class="chat-key" id="chatKeyView">
+    <label for="chatKeyInput">Paste your Anthropic API key to chat. It’s stored only in <strong>this browser</strong> (localStorage) and sent directly to the Anthropic API — nowhere else.</label>
+    <input type="password" id="chatKeyInput" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+    <button class="save" id="chatKeySave">Save key &amp; start</button>
+    <p class="note">Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. Only works when the file is opened locally (from disk), not from the shared artifact link. Clear it anytime with the ⚙ link.</p>
+  </div>
+  <div class="chat-body" id="chatBody" style="display:none">
+    <div class="msg bot">Ask me anything about the derivation on this page — the ELBO, why the KL terms split the way they do, the complete-the-square posterior, the ε-reparameterization, or DDIM. I have the full context of the walkthrough.</div>
+  </div>
+  <div class="chat-suggest" id="chatSuggest" style="display:none">
+    <button data-q="Why does the L_T prior term have no learnable parameters?">Why is L_T not trained?</button>
+    <button data-q="Walk me through the complete-the-square derivation of the tractable posterior variance beta-tilde_t.">Posterior variance</button>
+    <button data-q="Prove that the DDIM non-Markovian forward process preserves the marginals q(x_t|x_0).">DDIM marginal proof</button>
+  </div>
+  <div class="chat-foot" id="chatFoot" style="display:none">
+    <div class="chat-err" id="chatErr" style="display:none"></div>
+    <div class="chat-input">
+      <textarea id="chatText" rows="1" placeholder="Ask about the math…"></textarea>
+      <button id="chatSend" aria-label="Send" title="Send">↑</button>
+    </div>
+    <p class="note" style="margin:8px 2px 0;font-size:11px;color:var(--faint)">
+      <a href="#" id="chatClearKey" style="color:var(--faint)">⚙ change / clear API key</a>
+    </p>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var KEY_LS="anthropic_api_key", MODEL="claude-opus-4-8";
+  var SYSTEM="You are a patient graduate-level tutor embedded in an interactive web page that derives diffusion models end to end at the rigor of Ho et al. (DDPM) and Song et al. (DDIM): the forward process and its marginal q(x_t|x_0)=N(sqrt(abar_t)x_0,(1-abar_t)I); the ELBO via Jensen and the exact identity log p = ELBO + KL; the decomposition of -ELBO into the prior term L_T=KL(q(x_T|x_0)||p(x_T)), the denoising terms L_{t-1}=KL(q(x_{t-1}|x_t,x_0)||p_theta(x_{t-1}|x_t)), and reconstruction L_0, via the Bayes/telescoping trick; the tractable posterior mean mu-tilde_t and variance beta-tilde_t=(1-abar_{t-1})/(1-abar_t)*beta_t by completing the square; why p_theta is Gaussian in the small-step (Feller) limit; the KL-of-two-Gaussians collapse to a mean-matching MSE; the reparameterization mu_theta=1/sqrt(alpha_t)(x_t - beta_t/sqrt(1-abar_t) eps_theta) giving L_simple=E||eps-eps_theta||^2 and the weight lambda_t; why sampling is sequential; and DDIM (non-Markovian forward with the same marginals — provable by induction, sigma=0 deterministic ODE, step-skipping, and the speed vs quality/diversity tradeoff). Answer the user's questions about this material precisely and rigorously but concisely. Use plain-text math notation (sqrt, ^, subscripts as _t, Greek spelled out like alpha-bar, epsilon, theta, sigma) since the chat renders plain text, not LaTeX. Reference the relevant section by its idea when helpful.";
+
+  var fab=document.getElementById('chatFab'), panel=document.getElementById('chatPanel');
+  var keyView=document.getElementById('chatKeyView'), body=document.getElementById('chatBody');
+  var suggest=document.getElementById('chatSuggest'), foot=document.getElementById('chatFoot');
+  var keyInput=document.getElementById('chatKeyInput'), keySave=document.getElementById('chatKeySave');
+  var text=document.getElementById('chatText'), send=document.getElementById('chatSend');
+  var errEl=document.getElementById('chatErr'), sub=document.getElementById('chatSub');
+  var history=[], busy=false;
+
+  function getKey(){ try{return localStorage.getItem(KEY_LS)||"";}catch(e){return "";} }
+  function hasKey(){ return getKey().length>10; }
+  function showChat(){ keyView.style.display='none'; body.style.display='flex'; suggest.style.display='flex'; foot.style.display='block'; }
+  function showKey(){ keyView.style.display='flex'; body.style.display='none'; suggest.style.display='none'; foot.style.display='none'; }
+  function refresh(){ if(hasKey()) showChat(); else showKey(); }
+
+  fab.addEventListener('click',function(){ panel.classList.add('open'); fab.classList.add('hidden'); refresh();
+    if(hasKey()) text.focus(); else keyInput.focus(); });
+  document.getElementById('chatClose').addEventListener('click',function(){ panel.classList.remove('open'); fab.classList.remove('hidden'); });
+  keySave.addEventListener('click',function(){ var k=keyInput.value.trim(); if(k.length<10){ keyInput.focus(); return; }
+    try{ localStorage.setItem(KEY_LS,k); }catch(e){} keyInput.value=''; refresh(); text.focus(); });
+  keyInput.addEventListener('keydown',function(e){ if(e.key==='Enter') keySave.click(); });
+  document.getElementById('chatClearKey').addEventListener('click',function(e){ e.preventDefault();
+    try{localStorage.removeItem(KEY_LS);}catch(err){} showKey(); keyInput.focus(); });
+
+  document.querySelectorAll('#chatSuggest button').forEach(function(b){
+    b.addEventListener('click',function(){ if(busy) return; ask(b.getAttribute('data-q')); });
+  });
+  text.addEventListener('input',function(){ text.style.height='auto'; text.style.height=Math.min(text.scrollHeight,120)+'px'; });
+  text.addEventListener('keydown',function(e){ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send.click(); } });
+  send.addEventListener('click',function(){ var q=text.value.trim(); if(!q||busy) return; text.value=''; text.style.height='auto'; ask(q); });
+
+  function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function fmt(s){ return esc(s).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>'); }
+  function addMsg(cls,txt){ var d=document.createElement('div'); d.className='msg '+cls; d.textContent=txt;
+    body.appendChild(d); body.scrollTop=body.scrollHeight; return d; }
+  function showErr(m){ errEl.textContent=m; errEl.style.display='block'; }
+  function clearErr(){ errEl.style.display='none'; }
+
+  async function ask(q){
+    clearErr(); addMsg('user',q); history.push({role:'user',content:q});
+    busy=true; send.disabled=true; sub.textContent='thinking…';
+    var bubble=document.createElement('div'); bubble.className='msg bot';
+    bubble.innerHTML='<span class="cursor"></span>'; body.appendChild(bubble); body.scrollTop=body.scrollHeight;
+    var acc='';
+    try{
+      var resp=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{ 'content-type':'application/json','x-api-key':getKey(),
+          'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
+        body:JSON.stringify({ model:MODEL, max_tokens:2048, stream:true, system:SYSTEM, messages:history })
+      });
+      if(!resp.ok){ var tx=await resp.text(); var msg='Request failed ('+resp.status+')';
+        try{ var j=JSON.parse(tx); if(j.error&&j.error.message) msg=j.error.message; }catch(e){} throw new Error(msg); }
+      var reader=resp.body.getReader(), dec=new TextDecoder(), buf='';
+      while(true){
+        var r=await reader.read(); if(r.done) break;
+        buf+=dec.decode(r.value,{stream:true});
+        var parts=buf.split('\n\n'); buf=parts.pop();
+        for(var i=0;i<parts.length;i++){
+          var line=parts[i], idx=line.indexOf('data:'); if(idx<0) continue;
+          var data=line.slice(idx+5).trim(); if(!data||data==='[DONE]') continue;
+          try{ var ev=JSON.parse(data);
+            if(ev.type==='content_block_delta' && ev.delta && ev.delta.type==='text_delta'){
+              acc+=ev.delta.text; bubble.innerHTML=fmt(acc)+'<span class="cursor"></span>'; body.scrollTop=body.scrollHeight;
+            } else if(ev.type==='error' && ev.error){ throw new Error(ev.error.message||'stream error'); }
+          }catch(e){ if(e.message && e.message!=='Unexpected end of JSON input') throw e; }
+        }
+      }
+      bubble.innerHTML=fmt(acc)||'<em>(no response)</em>'; history.push({role:'assistant',content:acc});
+    }catch(err){
+      if(acc){ bubble.innerHTML=fmt(acc); history.push({role:'assistant',content:acc}); }
+      else if(bubble.parentNode){ bubble.parentNode.removeChild(bubble); }
+      showErr(err.message||String(err)); if(!acc) history.pop();
+    }finally{ busy=false; send.disabled=false; sub.textContent='Companion to this derivation · Opus 4.8'; text.focus(); }
+  }
+})();
+</script>
+</body>
+</html>

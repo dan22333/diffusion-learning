@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# ML artifacts / large outputs
+*.ckpt
+*.pt
+*.pth
+wandb/
+outputs/
