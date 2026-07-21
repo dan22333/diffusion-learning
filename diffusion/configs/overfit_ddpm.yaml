@@ -1,0 +1,33 @@
+# Phase 0- config: overfit ONE tiny batch to prove the pipeline is correct.
+# Small model + tiny images + few timesteps so it runs in ~a minute on CPU/MPS.
+# This is the "can it memorize?" test — NOT a learning run (that's Phase 0.5).
+
+model:
+  image_size: 16
+  in_channels: 3
+  base_channels: 32
+  channel_mults: [1, 2]
+  num_res_blocks: 1
+  time_embed_dim: 128
+
+diffusion:
+  schedule: cosine     # try "linear" to see the schedule's effect
+  timesteps: 200       # short chain is plenty to memorize a toy batch
+
+data:
+  dataset: toy
+  num_images: 8
+
+train:
+  steps: 1500
+  batch_size: 8
+  lr: 0.0002
+  ema_decay: 0.999
+  warmup_steps: 100
+  grad_clip: 1.0
+  log_every: 100
+  ckpt_every: 500
+  seed: 0
+  device: auto         # auto -> mps on Apple Silicon
+  out_dir: runs/overfit
+  overfit_one_batch: true

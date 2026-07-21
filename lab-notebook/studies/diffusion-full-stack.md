@@ -48,7 +48,7 @@ Shared constraints every child experiment inherits:
 
 | Stage | Status | Experiment | Purpose |
 |---|---|---|---|
-| 0− | planned | _Not created_ | Local (Mac): build repo, unit-test math, overfit one batch to ~0 (correctness) |
+| 0− | done | [phase0-overfit](../../experiments/phase0-overfit/README.md) | Local (Mac): build repo, unit-test math, overfit one batch (~22× loss collapse) |
 | 0 | planned | _Not created_ | Move same repo to cheap L4/T4 GCE VM; learn GPU systems (util, profiler, dataloader stalls) |
 | 0.5 | planned | _Not created_ | Full CIFAR-10 (50k): build + race DDPM/DDIM/EDM/flow-matching; steps-vs-quality |
 | 0.75 | planned | _Not created_ | Generative-quality metrics suite on the four models; where metrics disagree |

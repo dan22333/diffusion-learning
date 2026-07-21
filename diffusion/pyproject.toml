@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diffusion"
+version = "0.0.1"
+description = "Diffusion learning lab — Phase 0- (local correctness) onward"
+requires-python = ">=3.10"
+dependencies = ["torch", "torchvision", "pyyaml", "numpy", "pillow"]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
