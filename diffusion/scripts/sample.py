@@ -34,7 +34,9 @@ def main() -> None:
     parser.add_argument("--out", default="sample_grid.png")
     args = parser.parse_args()
 
-    ckpt = torch.load(args.ckpt, map_location="cpu")
+    # weights_only=False: our checkpoints store the Config (with numpy scalars),
+    # which PyTorch 2.6's safe unpickler rejects. These are our own trusted files.
+    ckpt = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cfg = Config.from_dict(ckpt["config"])
     device = get_device(cfg.train.device)
 

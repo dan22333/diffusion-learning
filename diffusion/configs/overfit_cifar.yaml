@@ -1,0 +1,47 @@
+# Phase 0- (real-image variant): overfit ONE batch of 8 real CIFAR-10 images.
+# Same "can it memorize?" correctness test as overfit_ddpm.yaml, but on real
+# 32x32 images (high-frequency detail, natural statistics) instead of smooth
+# synthetic gradients. Still NOT a learning run — that's Phase 0.5.
+#
+#   python scripts/train.py --config configs/overfit_cifar.yaml
+#
+# Bigger than the toy config (real detail needs more capacity + more steps) but
+# still runs in a few minutes on Apple Silicon (MPS). CIFAR-10 downloads to ./data
+# on first run.
+
+model:
+  image_size: 32          # CIFAR-10 native resolution
+  in_channels: 3
+  base_channels: 64
+  channel_mults: [1, 2, 2]  # 32 -> 16 -> 8 feature maps
+  num_res_blocks: 2
+  time_embed_dim: 256
+
+diffusion:
+  schedule: cosine
+  # 200 (not the full 1000): this is an OVERFIT sanity check, not a learning run.
+  # With 8 images, fewer timesteps means each noise level gets far more training
+  # visits, so even the hard high-noise steps (where the full chain starts) are
+  # memorized well enough for ancestral sampling to converge. Diagnosed at 1000:
+  # the reverse chain recovered images perfectly from t0<=600 but diverged from
+  # pure noise because t~900-999 were undertrained. Phase 0.5 uses the full 1000.
+  timesteps: 200
+
+data:
+  dataset: cifar10
+  num_images: 8
+  data_root: ./data
+
+train:
+  steps: 6000
+  batch_size: 8
+  lr: 0.0002
+  ema_decay: 0.999
+  warmup_steps: 200
+  grad_clip: 1.0
+  log_every: 200
+  ckpt_every: 1000
+  seed: 0
+  device: auto            # auto -> mps on Apple Silicon
+  out_dir: runs/overfit_cifar
+  overfit_one_batch: true

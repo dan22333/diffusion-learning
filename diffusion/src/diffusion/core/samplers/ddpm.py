@@ -27,11 +27,22 @@ class DDPMSampler(Sampler):
             t = torch.full((shape[0],), i, device=device, dtype=torch.long)
             eps = model(x, t)
 
-            # Mean of the reverse step, expressed via the predicted noise.
+            # Recover the implied clean image, then CLAMP it to the valid image
+            # range before forming the posterior mean. This clamp is the standard
+            # stabilizer (Ho et al.'s `clip_denoised`): at the top timesteps 1/sqrt(a)
+            # is huge (~31x for a cosine schedule with zero terminal SNR), so tiny eps
+            # errors blow x out of [-1, 1] and the chain diverges into noise. Clamping
+            # the x0 estimate each step keeps ancestral sampling on the data manifold.
+            acp = d.alphas_cumprod[i]
+            acp_prev = d.alphas_cumprod_prev[i]
             beta = d.betas[i]
-            sqrt_recip_alpha = d.sqrt_recip_alphas[i]
-            sqrt_1m_acp = d.sqrt_one_minus_alphas_cumprod[i]
-            mean = sqrt_recip_alpha * (x - beta / sqrt_1m_acp * eps)
+            x0 = (x - d.sqrt_one_minus_alphas_cumprod[i] * eps) / torch.sqrt(acp)
+            x0 = x0.clamp(-1.0, 1.0)
+
+            # Posterior mean q(x_{t-1} | x_t, x0) in terms of the clamped x0 and x_t.
+            coef_x0 = beta * torch.sqrt(acp_prev) / (1.0 - acp)
+            coef_xt = (1.0 - acp_prev) * torch.sqrt(1.0 - beta) / (1.0 - acp)
+            mean = coef_x0 * x0 + coef_xt * x
 
             if i > 0:  # add noise everywhere except the final denoising step
                 noise = torch.randn(shape, device=device, generator=generator)

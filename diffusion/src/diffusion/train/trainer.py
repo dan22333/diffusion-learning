@@ -16,7 +16,7 @@ import torch
 
 from ..config import Config
 from ..core import GaussianDiffusion
-from ..data import make_toy_batch
+from ..data import make_cifar_batch, make_toy_batch
 from ..models import EMA, UNet
 from ..utils import get_device, get_rng_state, seed_everything, set_rng_state
 
@@ -57,12 +57,26 @@ class Trainer:
         )
 
         # --- the fixed batch we overfit (Phase 0-) ---
-        self.batch = make_toy_batch(
-            num_images=cfg.data.num_images,
-            image_size=m.image_size,
-            channels=m.in_channels,
-            seed=cfg.train.seed,
-        ).to(self.device)
+        # "toy" = synthetic gradients (offline, code-correctness); "cifar10" = real
+        # images (harder, more honest memorization test) — same one-batch protocol.
+        ds = cfg.data.dataset
+        if ds == "toy":
+            self.batch = make_toy_batch(
+                num_images=cfg.data.num_images,
+                image_size=m.image_size,
+                channels=m.in_channels,
+                seed=cfg.train.seed,
+            ).to(self.device)
+        elif ds == "cifar10":
+            self.batch = make_cifar_batch(
+                num_images=cfg.data.num_images,
+                image_size=m.image_size,
+                channels=m.in_channels,
+                seed=cfg.train.seed,
+                data_root=cfg.data.data_root,
+            ).to(self.device)
+        else:
+            raise ValueError(f"unknown dataset {ds!r} (expected 'toy' or 'cifar10')")
 
         self.step = 0
         os.makedirs(cfg.train.out_dir, exist_ok=True)

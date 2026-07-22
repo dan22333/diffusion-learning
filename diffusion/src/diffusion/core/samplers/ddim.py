@@ -41,7 +41,11 @@ class DDIMSampler(Sampler):
             acp_prev = d.alphas_cumprod[i_prev] if i_prev >= 0 else torch.tensor(1.0, device=device)
 
             # Predict the clean image, then re-noise it to the previous timestep.
+            # Clamp the x0 estimate to the valid range (Ho et al.'s `clip_denoised`)
+            # — keeps the trajectory on the data manifold and stops the top-timestep
+            # 1/sqrt(acp) blow-up from diverging into noise.
             x0_pred = (x - torch.sqrt(1 - acp_t) * eps) / torch.sqrt(acp_t)
+            x0_pred = x0_pred.clamp(-1.0, 1.0)
 
             # eta controls how much stochastic noise to reinject (0 -> deterministic).
             sigma = self.eta * torch.sqrt(
