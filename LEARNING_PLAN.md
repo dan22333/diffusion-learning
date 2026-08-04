@@ -118,11 +118,11 @@ diffusion/
 | **B — Diffusion fundamentals + GPU literacy** | **2** GPU + profiler · **3** DDPM/DDIM/EDM/rectified-flow race · **4** metrics suite | cheap L4/T4 |
 | **C — Modern architecture** | **5** what space diffusion runs in · **6** DiT backbone | cheap VM |
 | **D — The ecosystem** | **7** HuggingFace, CFG, ControlNet/LoRA, open weights | cheap VM |
-| **E — World models** | **8** Diamond (train → play) · **9** the forcing family | A100 |
-| **F — Scale (needed *before* MIRA)** | **10** DDP → FSDP, single-node then multi-node | 8×GPU → cluster |
+| **E — World models** | **8** Diamond (train → play) **+ IRIS paired read/run** · **9** the forcing family | A100 |
+| **F — Scale (needed *before* MIRA)** | **10** DDP → FSDP, single-node → multi-node, **+ one Vertex job** | 8×GPU → cluster |
 | **G — Reproduce the current stack** | **11** MIRA end-to-end | multi-GPU |
 | **H — Make it fast, then ship it** | **12** distillation · **13** sweeps · **14** kernels · **15** quantize + serve | — |
-| **I — Frontier** | **16** memory & multiplayer (MultiGen, Matrix-Game, LingBot) | — |
+| **I — Frontier** | **16** memory & multiplayer (MultiGen, Matrix-Game, LingBot) · **17** latent actions (Genie read, **LAPO run**) | — |
 
 ---
 
@@ -364,6 +364,39 @@ Get it training, get it sampling, **play** the world model. Read the code until 
 > **(b) Latent / DiT / diffusion-forcing:** **Oasis**, **MIRA**, **Matrix-Game 2.0/3.0**, **minWM**, **LingBot-World**. Where the field is, and where Phases 5 → 6 → 9 → 11 take you.
 > Diamond stays the teaching anchor because it is cheap, complete, single-GPU and *playable*. Lineage (b) is the employable one. Do (a) to understand, (b) to be current.
 
+### What Diamond actually is: Dreamer's programme, executed with diffusion
+
+Diamond is not "a playable demo" — it is an **RL world model**, and that framing explains the repo (`actor_critic.py`, `rew_end_model.py` — no video-generation world model ships those). The *goal* is Dreamer's: **train an agent entirely inside a learned world model.** Every *mechanism* differs.
+
+| Model | State representation | Sequence model | Policy trains on | Params | Atari-100k HNS |
+|---|---|---|---|---|---|
+| **DreamerV3** | compact **recurrent latent** (RSSM — GRU-based, **not** a transformer) | GRU recurrence | **latents** — never needs pixels | 18M | 1.097 |
+| **IRIS** | **discrete VQ image tokens** | autoregressive **transformer** | decoded frames | 30M | 1.046 |
+| **STORM** | discrete latents, DreamerV3-style | **transformer** | latents | — | 1.266 |
+| **DIAMOND** | **raw pixels**, no compression | **diffusion** (conv UNet + EDM) | rendered frames | **13M** | **1.46** ← SOTA |
+
+> **The striking number is 13M beating 18M and 30M.** Not a scale win — a *representation* win, which is exactly the paper's title, *"Visual Details Matter."* The argument targets IRIS's **discrete** tokenizer: quantisation drops small but game-critical detail (a distant enemy, a bullet, a HUD digit), and **an agent cannot act on what the world model failed to render.**
+> ⚠️ Common mis-statement to avoid: *"Diamond is DreamerV3 with a transformer instead of an RNN."* DreamerV3 is an **RSSM (recurrent)**; the transformer variants are **TWM** and **STORM**; and Diamond is neither — it is diffusion over pixels.
+
+### Read *and run* IRIS alongside Diamond — the cleanest controlled comparison in this literature
+
+[`eloialonso/iris`](https://github.com/eloialonso/iris) (*Transformers are Sample-Efficient World Models*, ICLR 2023 notable top-5%; Micheli, **Alonso**, **Fleuret**) ships **code and pretrained checkpoints**, so you can run it without training anything.
+
+**Why the pairing is unusually valuable:** Diamond's thesis is an argument *against* IRIS, and **both come from the same lab, on the same benchmark, with the same code conventions** — Alonso and Fleuret authored both. The comparison is therefore genuinely **controlled**: *discrete tokens + transformer* vs *pixels + diffusion*, with team, benchmark and engineering held roughly constant. That almost never happens in this field.
+
+It also closes a loop opened in Phase 5, which cites IRIS as the "discrete latent / VQ-VAE + transformer" option without ever having you look at it.
+
+**Deliverable:** run IRIS from a checkpoint, run your Diamond checkpoint, and write the paragraph explaining **why Diamond went to pixels**. Being able to argue *both* sides is what separates having read the papers from having understood them.
+
+### Know that you are only learning one of two paradigms
+
+| Paradigm | Predicts | Examples | In this plan |
+|---|---|---|---|
+| **Generative / pixel-rendering** | the next **frame** | Sora, Genie, MIRA, Diamond, Matrix-Game | ✅ covered end-to-end |
+| **Non-generative / latent prediction** | the next **embedding** — never renders | **V-JEPA 2** (Meta), **DreamerV3** | ⚠️ read only |
+
+V-JEPA 2 learns physics from ~1M hours of video and transfers to robot control with ~62 h of robot data; DreamerV3 trains a policy by imagining rollouts in a latent world model. **Both open.** Don't reproduce either — but you should be able to say why the JEPA camp argues rendering pixels is wasted capacity, and why the generative camp pays that cost to get a *usable simulator* out of it. **Diamond is the bridge:** a generative world model serving Dreamer's purpose.
+
 - **Read GameNGen's paper here**, alongside Diamond's, as a same-lineage contrast. It costs an evening and it's where the drift problem is first named.
 - *Optional stretch:* re-run EDM on **class-conditional ImageNet-64**, or apply Phase 5's latent setup at higher resolution.
 - *Optional capstone (CS:GO):* train the pixel-space CS:GO world model (`git checkout csgo`) on the public [CounterStrike_Deathmatch dataset](https://huggingface.co/datasets/TeaPearce/CounterStrike_Deathmatch) (5.5M frames / 95h). The authors did it in ~12 days on one RTX 4090 (≈$100–200 rented). Mind the tens-to-hundreds of GB hdf5 download.
@@ -431,6 +464,49 @@ This is the concept that turns an image diffusion model into a playable world mo
 5. **The scaling study** — profile at 1, 2, 4, 8 GPUs and plot **scaling efficiency** (samples/sec per GPU ÷ 1-GPU baseline). If it isn't near-linear on one node, find out why *before* adding a second node: usually the dataloader, an unnecessary host sync, or comms not overlapping compute.
 
 **Deliverable:** one DiT config that requires FSDP, plus a scaling-efficiency plot from 1→8 GPUs and a written explanation of where the efficiency went. This is a portfolio artifact — it's exactly what a systems interview asks you to describe.
+
+### 10c — Submit one Vertex AI custom job *(half a day, ~$20)*
+
+Take the **exact same script** from 10a and submit it as a **Vertex AI custom training job**. Nothing about the code changes; only how it is launched.
+
+The value is not Vertex-specific — it is feeling the **submit-vs-interactive shift**:
+
+| | **VM** (10a–10b) — the workshop | **Vertex** — the factory |
+|---|---|---|
+| Start-up | already warm, `python train.py` | **cold provision, minutes** |
+| Debugging | SSH in, poke live, `nvitop` | **no persistent shell** — logs and metrics only |
+| Re-run | edit, re-run in seconds | **cancel + resubmit** |
+| Good for | iteration | unattended, reproducible, queued runs |
+
+Every cloud ML job posting assumes you have lived that once, and it makes the "VM = workshop, Vertex = factory" distinction real instead of theoretical. Package the container, submit, watch the logs, retrieve the checkpoint from GCS. Then stop.
+
+**Deliverable:** one completed Vertex job producing a checkpoint in GCS, launched from unmodified 10a code.
+
+### Kubernetes — deliberately out of scope for *training*, and here is the reasoning
+
+Not an omission, a decision. **Training is a bounded job with resources known up front → a VM or a Vertex job is the right tool.** K8s earns its keep for (a) always-on inference with variable traffic and (b) shared multi-team fleets with quotas. Neither describes you, and K8s-for-training is ops trivia that will not make you better at diffusion.
+
+**⚠️ The one case where this reverses: reinforcement learning.** RL is genuinely the workload K8s + Ray were built for, because it is **heterogeneous and dynamic** in a way supervised training is not:
+
+- Many **CPU rollout workers** + fewer **GPU learners** + separate **inference/verifier** models, all live at once
+- Workers come and go → **elastic scaling** matters
+- Ray originated at Berkeley *for RL* (RLlib came out of that project), and modern RL-for-LLM stacks (verl, OpenRLHF, NeMo-RL) are built on Ray
+- The 2026 GKE pattern for this is explicit: **Kueue + JobSet** for admission and gang scheduling, **Ray on top** as the orchestrator, and **dedicated nodes for inference** (vLLM) so memory-heavy training buffers don't contend with compute-heavy rollout generation
+
+**This is relevant to you eventually** — Diamond *is* RL (agent trained inside the world model), and the rollout-generation / policy-training / verification split is exactly that shape. It just isn't relevant at Diamond's single-GPU scale.
+
+**On KubeRay specifically** — I should be precise, because it is easy to overstate. KubeRay is the **operator that runs Ray clusters as native K8s resources**. It is *one* good option on GKE, not the default for everything:
+
+| Workload | Usual GKE choice |
+|---|---|
+| Plain PyTorch DDP/FSDP | **JobSet + Kueue** (simpler; Kueue admits and enforces quota) |
+| A full ML platform (training + pipelines + serving) | **Kubeflow** Training Operator |
+| **Ray-native programs — RL, tuning, heterogeneous pipelines** | **KubeRay** |
+| LLM/model **inference** | **vLLM** + KServe, or Ray Serve via KubeRay |
+
+Rule of thumb: **if your workload is already a Ray program, KubeRay is how you run it on K8s. If it's plain PyTorch, JobSet + Kueue is simpler and more common.** The 2026 consensus stack is roughly *vLLM (inference) + Kueue (GPU scheduling) + KServe (serving) + Ray (distributed training/RL)*.
+
+**If you do want K8s:** treat it as a **separate track**, not part of this plan — GKE Autopilot plus one KubeRay cluster, motivated by an RL or serving workload rather than by diffusion training. And note it becomes a genuine requirement if you target ML **platform** roles rather than ML/research engineering.
 
 - **10a — single node, multiple GPUs** (`a3-highgpu-8g`, up to 8) — the five runs above. **No orchestrator needed.**
 - **10b — multi-node.** *Then* adopt **Accelerate** (same script → DDP/FSDP/DeepSpeed via one config). Now you need something to *provision machines + launch processes across them*. Pick **one**: **Vertex** (managed, submit a multi-replica job) or **Ray on GCE** (`ray up`, Python-native, no K8s). K8s only if joining a shared-fleet org.
@@ -556,12 +632,67 @@ These are **three different problems**, not three solutions to one — the most 
 - **MIRA and MultiGen reach overlapping goals by opposite means.** MultiGen gets cross-player coherence from **shared explicit state**; MIRA gets it from **one joint model**. MultiGen's is the more general interface (any N, editable); MIRA's is the higher-fidelity single instance. Neither has the other's mechanism.
 - **Matrix-Game 3.0 sits between them:** memory is **learned and retrieved** (inside attention) rather than authored (MultiGen) or absent (MIRA). Strongest *spatial* claim; MIRA has the strongest *stability* claim; MultiGen the strongest *persistence/editability* claim. **Different axes — none implies the others.**
 - **LingBot-World** (Robbyant/Ant Group) — the largest fully open one: **Wan2.2-based DiT trained with FSDP**, MoBA attention, 720p/60fps, hour-long rollouts, multi-user, plus Pilot/Director agents. **Code *and* weights released.** Verdict: **read + run, don't reproduce.** It's the best way to *feel* a state-of-the-art world model (MIRA ships no weights), and it's a concrete reference for the FSDP scale-out of Phase 10.
+- **Genie / Genie 2 / Genie 3** (DeepMind) — the other frontier line, and the only one that learns **actions themselves** rather than assuming them. Genie 3 does navigable 3D worlds at 24 fps in real time, general-purpose. **All closed** — reference points only. The mechanism is reproducible at small scale though, which is Phase 17.
 - **Natural capstone:** graft MultiGen's Memory/Observation/Dynamics decomposition onto a world model you already control. **Diamond is by far the cheapest host** — you already have the rollout loop *and* an RL agent. `minWM` is explicitly built as a pluggable framework for this kind of surgery.
 
 **How to evaluate any of this — the two axes need two different tests:**
 - **Drift** → the **drift curve** from Phase 9 (quality vs rollout position).
 - **Spatial memory** → the **return-to-viewpoint (loop-closure) test**: drive a closed loop — turn 360°, or leave a room and come back — and compare the frame at the *returned* pose against the frame originally captured at that pose (PSNR/LPIPS, plus "is it the same room at all?"). Report **loop length vs similarity**. A model with no memory scores fine at loop length 0 and collapses immediately after.
 - Running only one of these is how papers claim "long-horizon" while failing the other. **MIRA is a live example:** it has a strong drift result and *no memory mechanism*. It gets away with it because **Rocket League barely needs spatial memory** — one fixed symmetric arena, almost entirely in frame at all times, very little offscreen geometry to forget. The *task* hides the problem. Put the same architecture in a world where you walk into a building and back out and the gap appears immediately. **Always ask what the benchmark's environment lets the model skip.**
+
+### Phase 17 — Latent actions: where do actions come from when nothing is labelled?
+
+*Placed last on purpose: this is orthogonal to everything above. It does not block Phases 12–16 and nothing in them depends on it — it answers a question the rest of the plan quietly assumes away.*
+
+**The assumption this phase attacks.** Every world model in this plan is handed its actions:
+
+| Phase | Where its actions come from |
+|---|---|
+| 8 Diamond | the RL agent generated them |
+| 11 MIRA | Rocket Science ships labelled action streams at 15 Hz |
+| 12 Matrix-Game | action-annotated Unreal/GTA5 capture |
+| — minWM | camera-control fine-tune on labelled trajectories |
+
+So the plan's implicit answer to *"where do actions come from?"* is **"somebody labelled them"** — which caps you at curated datasets and rules out the entire internet. **Latent action models are the only route past that.**
+
+**1. Read Genie, then diff it against an implementation.** [Genie](https://arxiv.org/html/2402.15391v1) (Bruce et al., DeepMind, ICML 2024 best paper) has three parts:
+
+1. a **spatiotemporal video tokenizer** (ST-ViViT / MagViT-style)
+2. a **Latent Action Model** — a **VQ-VAE over frame pairs** producing a *deliberately small* discrete codebook, so codes become interpretable (`MOVE_RIGHT`)
+3. an **autoregressive dynamics model** (MaskGIT) predicting the next frame from video tokens + latent action
+
+Trained **entirely unsupervised on unlabelled video** — no ground-truth actions anywhere — and you can still act frame-by-frame in the result.
+
+Then read [`myscience/open-genie`](https://github.com/myscience/open-genie) (MIT) **as a companion to the paper**. Its three modules map 1:1 onto the paper's three components, which makes it well suited to paper↔code reading — the same technique used in Phase 9 (Diamond's loop vs Self-Forcing's) and Phase 7 (your DiT vs `diffusers`').
+> ⚠️ **Read it, don't run it.** Its own roadmap still lists "add functioning training script" and "show some results" as open TODOs. No datasets, no weights, no documented hardware requirements. Trust the **architecture**; treat the **training details** as unverified.
+
+**2. Do NOT reproduce Genie.** The numbers, so the decision is obvious: **11B parameters**, **30,000 hours** of 2D-platformer video, filtered from **6.8 million videos** using a learned quality classifier that itself needed **10k human-labelled videos**. The scaling study alone ran 40M → 2.7B before the final 11B. The data is not provided and curating it would be a bigger project than the model. This is an industrial TPU-pod run.
+
+**3. Actually run LAPO instead** — [`schmidtdominik/LAPO`](https://github.com/schmidtdominik/LAPO), *"Learning to Act without Actions"* (Schmidt & Jiang, ICLR 2024 spotlight). It isolates the same idea at roughly a thousandth of the compute:
+
+```
+IDM (inverse dynamics):  (frame_t, frame_t+1)  →  latent action a
+FDM (forward dynamics):  (frame_t, a)          →  predicted frame_t+1
+```
+
+Train jointly for **predictive consistency** — the IDM must emit an `a` that lets the FDM reconstruct the true next frame, so `a` becomes *whatever information explains the transition*.
+
+> **The whole trick is the information bottleneck on `a`.** Without it the IDM cheats: it copies frame_t+1 straight through and "the action" becomes the answer. Constrain `a` to be tiny and it is forced to encode only the **cause** of the change. Genie's small VQ codebook implements the same constraint by different means — recognising that these are the same idea is the insight of this phase.
+
+Output: latent-action policies, a world model, and an IDM — all from video. Then fine-tune to real controls either offline with a **small** labelled set or online with rewards.
+
+**Practicalities (verified):** 16 Procgen tasks, expert `.npz` data provided via Google Drive, **~1 hour per stage × 3 stages** per task, GPU required, **~40 GB host RAM** (it loads ~2.5M frames — a machine-shape constraint, not a GPU one). **No pretrained checkpoints.** The download script can hit Drive bandwidth limits; there's a manual fallback. **≈$5 on an L4.**
+
+**The family, sorted** — so you pick the right prior for a domain:
+
+| Method | Latent action type | Scale | Domain fit |
+|---|---|---|---|
+| **Genie** | small **discrete** VQ codebook | internet-scale | discrete controls (platformers: left/right/jump) |
+| **LAPO** | bottlenecked latent | RL-benchmark, **tractable** | discrete-ish control, Procgen |
+| **CLAM** | **continuous** | robotics | continuous control — joint torques, manipulation. A codebook of 8 actions is the wrong prior here |
+
+**Deliverable:** LAPO trained on 2–3 Procgen tasks, with the recovered latent action space compared against the true action space (does code 3 reliably mean "jump"?), plus a written account of how Genie's codebook and LAPO's bottleneck are the same mechanism.
+
 
 ---
 
