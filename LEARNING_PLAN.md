@@ -352,6 +352,36 @@ Three canonical forms of the trained kind: **ControlNet** (clone the base encode
 
 **Deliverable:** a notebook-free script that loads a pretrained DiT from `diffusers`, runs *your own* Phase 3 sampler against it, sweeps CFG scale, and plots **FID *and* Recall vs `w`** (watch them diverge). Plus one **tiny ControlNet on your own Phase 6 DiT** — Imagenette + Canny edges as the conditioning signal. Training a ControlNet on SDXL is expensive; training one on your own small model is cheap and teaches the identical lesson: freeze the base, add a branch, zero-init the join.
 
+### Where to run it: mostly cloud, but not all of it
+
+This phase is **mostly inference on open weights**, which is cheap — the only training is the tiny ControlNet, and that's on *your* model, not theirs.
+
+| Task | Mac (MPS) | Verdict |
+|---|---|---|
+| SD 1.5 inference @ 512² | ✅ works, slow | **Do the code-reading locally** — the "run my own sampler against their UNet" test doesn't need speed, only correctness |
+| SDXL inference | ⚠️ borderline, depends on unified memory | Either |
+| **Flux (12B)** | ❌ | **Cloud** |
+| CFG sweep + Phase 4 metrics | ⚠️ technically, but metrics want many samples | **Cloud** — the L4 |
+| ControlNet training | ❌ | **Cloud** |
+
+> **⚠️ Cloud VMs are ephemeral and these weights are large.** SDXL ≈ 7 GB, Flux ≈ 24 GB. Stop or delete the VM and you re-download everything. **Point `HF_HOME` at a persistent disk** (or sync the cache to a GCS bucket) *before* you start pulling weights, and size the boot disk accordingly. This is the practical thing that wastes an afternoon on your second session.
+
+> **⚠️ "Open weights" ≠ "open source", and two of these will bite you.**
+>
+> | Model | Licence | Commercial |
+> |---|---|---|
+> | **Flux.1-dev** | non-commercial | ❌ |
+> | **Flux.1-schnell** | Apache 2.0 | ✅ |
+> | **Wan 2.1 / 2.2** | Apache 2.0 | ✅ — part of why so much of Part G/I builds on it |
+> | SD 1.5 / SDXL | CreativeML OpenRAIL(-M / ++) | ✅ with use restrictions |
+> | SD3.5 | Stability Community | ✅ below a revenue threshold |
+> | DINOv2 | Apache 2.0 | ✅ |
+> | **DINOv3** | Meta licence — **separate download + acceptance** | ⚠️ resolve this **before Phase 11**; MIRA's repo requires you to fetch it yourself |
+> | MIRA | Apache 2.0 (no weights released) | ✅ |
+> | Matrix-Game | MIT | ✅ |
+>
+> The two that matter: **Flux-dev is non-commercial** (schnell is the permissive twin), and **DINOv3 needs Meta's terms accepted and a separate download** — which becomes a real blocking step in Phase 11, not Phase 7 trivia.
+
 ---
 
 ## Part E — World models
@@ -602,7 +632,33 @@ Quantize the distilled model, then serve it. **Diffusion quantization is harder 
 1. **Weight-only int8/fp8** — the safe baseline; should just work.
 2. **Push low-bit / activation quantization** — *expect* artifacts. Observe the timestep-varying-activation problem firsthand → understand why timestep-aware methods (Q-Diffusion, PTQD, SVDQuant 4-bit) exist. "Quantization that fights back" is the real lesson.
 - Ordering reminder: **distillation** (fewer steps) is the *big* inference win; quantization is the smaller, riskier secondary squeeze — hence last.
-- Then build **one custom inference container** (FastAPI / Triton), serve on **Cloud Run or Vertex Endpoint** — no K8s needed. Measure latency/quality live. For an interactive world model the real serving problem is **streaming KV-cache inference at a frame deadline**, not batch throughput.
+
+### 15b — Serving: pick the target that matches the workload's *shape*
+
+Build **one custom inference container** (FastAPI + your model, or Triton Inference Server) and serve it. But the choice of *where* is not a preference — it follows from one question: **is the workload stateless request/response, or a stateful interactive session?** Diffusion gives you both, and they want different platforms.
+
+| Target | Shape it fits | Why | Verdict |
+|---|---|---|---|
+| **VM** (GCE, one box) | anything, while learning | Zero abstraction. You see the real latency, the real GPU, the real memory. Nothing hides a mistake | ✅ **Start here, always** |
+| **Cloud Run** (GPU, L4) | **stateless** request/response — "generate an image from this prompt" | Serverless, scales to zero, no ops. GPU support is GA, and it does **HTTP *and* WebSocket streaming** — so token/frame streaming works | ✅ **Do this once** |
+| **Vertex AI Endpoint** | **stateless** managed prediction | Autoscaling, versioning, traffic splitting, monitoring — the managed-MLOps path. Least code, least control | ✅ **Do this once** |
+| **GKE** | **stateful interactive sessions**, GPU affinity, many concurrent streams | Session affinity, one pod per session, custom autoscaling on GPU/session count, and **GKE Inference Gateway** for model-aware routing (KV-cache affinity, queue depth) | ⚠️ **Only for the world-model case** |
+
+> **⚠️ Why an interactive world model breaks the serverless assumptions — and this is the interesting part.** Cloud Run and Vertex Endpoints are built for **stateless** prediction: request in, response out, any replica will do. An interactive world model is the opposite:
+> - It holds **per-session state** (the KV cache, the rollout history) — so request N+1 *must* reach the same replica as request N.
+> - It needs **one GPU per stream** (diffusion is already compute-bound at batch 1, so batching across users buys almost nothing — see the handbook's Part V).
+> - It has a **frame deadline** (~40 ms), not a throughput target.
+>
+> That is not a web-service shape, it is a **game-server** shape — long-lived, sticky, session-per-GPU. Which is exactly the workload Kubernetes handles well and serverless does not. Note the symmetry with Phase 10's RL exception: **K8s earns its keep on heterogeneous and stateful workloads, never on bounded training jobs.**
+
+**What to actually do, in order:**
+1. **VM first.** FastAPI + your distilled/quantized model on the GPU you already have. Measure p50/p99 latency honestly and confirm the frame budget. This is the only step that is *not* optional.
+2. **Then one serverless deploy** — Cloud Run *or* Vertex Endpoint, not both. Half a day. The lesson is the packaging and the cold-start behaviour, and you only need to feel it once.
+3. **GKE only if you actually build the interactive demo** — many concurrent players, session affinity, GPU-per-session. Skip otherwise; it is a week you could spend on Phase 14.
+
+**Measure the right thing.** For batch/API serving: throughput, cost per 1k images, p99 latency. For interactive: **frame-deadline hit rate** (what fraction of frames landed inside 40 ms), time-to-first-frame, and **GPU-seconds per session-minute** — which is the number that tells you whether the thing is economically viable at all.
+
+**Deliverable:** one container, served on a VM with an honest latency table, plus one serverless deploy. If you did Phase 14's KV-cache kernel, report the before/after on frame-deadline hit rate — that is the plot that connects kernels to a product.
 
 ---
 
