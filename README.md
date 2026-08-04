@@ -80,4 +80,4 @@ python scripts/sample.py --ckpt runs/overfit_cifar/latest.pt --sampler ddim --st
 
 That standard is not aspirational: MIRA — a 5B-parameter frontier world model — ships the same shape (`configs/ src/ tests/ scripts/`, Hydra, `torchrun`, `wandb`, `ruff`, `pytest`).
 
-> ⚠️ **Phase numbering changed on 2026-07-28**, from a fractional scheme to integers 1–17. Mapping: `0−→1, 0→2, 0.5→3, 0.75→4, 0.9→5, 0.95→6, 1→8, 1.5→9, 2→12, 2.5→13, 3→15, 4→10`. [`diffusion/README.md`](diffusion/README.md) still uses the old numbers in places — read "Phase 0−" as Phase 1 and "Phase 0.5" as Phase 3.
+> **Phase numbering changed on 2026-07-28**, from a fractional scheme to integers 1–17. Older notes and commit messages use the old names; the mapping is `0−→1, 0→2, 0.5→3, 0.75→4, 0.9→5, 0.95→6, 1→8, 1.5→9, 2→12, 2.5→13, 3→15, 4→10`.
