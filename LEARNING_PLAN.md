@@ -112,18 +112,29 @@ diffusion/
 
 **Numbering note:** phases are integers, in strict execution order. *(Renumbered 2026-07-28 from the old fractional scheme: 0−→1, 0→2, 0.5→3, 0.75→4, 0.9→5, 0.95→6, 1→8, 1.5→9, 2→12, 2.5→13, 3→15, 4→10.)*
 
-| Part | Phases | Where |
-|---|---|---|
-| **A — Foundations** | **1** build the repo, prove correctness | Mac |
-| **B — Diffusion fundamentals + GPU literacy** | **2** GPU + profiler · **3** DDPM/DDIM/EDM/rectified-flow race · **4** metrics suite | cheap L4/T4 |
-| **C — Modern architecture** | **5** what space diffusion runs in · **6** DiT backbone | cheap VM |
-| **D — The ecosystem** | **7** HuggingFace, CFG, ControlNet/LoRA, open weights | cheap VM |
-| **E — World models** | **8** Diamond (train → play) **+ IRIS paired read/run** · **9** the forcing family | A100 |
-| **F — Scale (needed *before* MIRA)** | **10** DDP → FSDP, single-node → multi-node, **+ one Vertex job** | 8×GPU → cluster |
-| **G — Reproduce the current stack** | **11** MIRA end-to-end | multi-GPU |
-| **H — Make it fast, then ship it** | **12** distillation · **13** sweeps · **14** kernels · **15** quantize + serve | — |
-| **I — Frontier** | **16** memory & multiplayer (MultiGen, Matrix-Game, LingBot) · **17** latent actions (Genie read, **LAPO run**) · **18** physics (benchmarks, **LaWM**) | — |
-| **J — Real-time products** | **19** Decart-class streaming (**Live2Diff** on a 4090) | 1×GPU |
+Each phase exists to teach **one transferable lesson**. If you finish a phase and can't state its lesson in your own words, you haven't finished it.
+
+| Part | # | Phase | **The lesson** | Where |
+|---|---|---|---|---|
+| **A** Foundations | **1** | Build the repo, prove correctness | **Correct ≠ learning.** Prove the pipeline works before spending a cent — and loss collapse is *not* proof | Mac |
+| **B** Fundamentals + GPU | **2** | GPU + profiler | **Name your bottleneck**: compute-bound, memory-bandwidth-bound, or dataloader-bound. Everything in Part H depends on this vocabulary | T4/L4 |
+| | **3** | DDPM · DDIM · EDM · rectified flow | Formulations differ in the **sampling ODE and parameterisation**, not in what they fundamentally learn. **DDIM is a sampler, not a model** | L4 |
+| | **4** | Metrics suite | **Every scalar metric hides a failure mode.** Report fidelity *and* diversity, or you aren't measuring | L4 |
+| **C** Modern architecture | **5** | What space diffusion runs in | **The representation you diffuse in sets your entire compute budget** — and semantic latents are easier to predict than reconstruction latents | L4 |
+| | **6** | Build a DiT | **Patch size is the compute knob.** Attention is just *mask × token set*; conditioning doesn't have to go through attention at all | L4 |
+| **D** Ecosystem | **7** | HuggingFace, CFG, ControlNet, LoRA | **From-scratch → raw PyTorch; on top of pretrained → HF.** And you can add a new conditioning signal to a frozen model — zero-init the join | L4 |
+| **E** World models | **8** | Diamond + IRIS paired | **Representation choice beats scale** (13M > 30M here), and there are **two paradigms** — render pixels, or predict embeddings | A100 |
+| | **9** | Video models + the forcing family | **A model that consumes its own output has a feedback problem, not a quality problem.** Drift is fixed in the training loop, never in the sampler | A100 |
+| **F** Scale | **10** | DDP → FSDP → multi-node + Vertex | **DDP's ceiling is memory, not GPU count.** Scaling is never free — measure efficiency before adding hardware | 8×A100 |
+| **G** Current stack | **11** | MIRA end-to-end | Reproducing a frontier system is **mostly data plumbing and knowing how to scale down** — not novel modelling | multi-GPU |
+| **H** Make it fast | **12** | Distillation | **Fewer steps beats faster steps** (25× vs 2×). But distillation spends diversity — so measure Recall, not just FID | A100 |
+| | **13** | Sweeps | **Search is a different problem from parallelism.** Sweeps sit *above* distributed training, they don't compete with it | — |
+| | **14** | Kernels | **Fusion is a bandwidth argument, not a FLOPs argument.** Exhaust `torch.compile` before writing a kernel | A100 |
+| | **15** | Quantize + serve | **Serving shape follows workload shape** — stateless request/response vs session-affine streaming are different platforms | A100 |
+| **I** Frontier | **16** | Memory & multiplayer | **Stability and spatial memory are independent axes.** Always ask what the benchmark's environment lets the model *skip* | 1×A100 |
+| | **17** | Latent actions (Genie, LAPO) | **Actions can be learned from unlabelled video.** The entire trick is the bottleneck that stops the inverse model from copying the future through | L4 |
+| | **18** | Physics (benchmarks, LaWM) | **Physical correctness ≠ visual plausibility.** And building a principle *into* the transition beats bolting a loss *onto* it | L4 |
+| **J** Real-time products | **19** | Decart-class streaming | **Real-time is an architecture property, not a speed property.** A bidirectional model cannot stream at any speed | 1×GPU |
 
 ---
 
@@ -449,6 +460,43 @@ V-JEPA 2 learns physics from ~1M hours of video and transfers to robot control w
 This is the concept that turns an image diffusion model into a playable world model, and it's missing from most curricula because it's neither a *formulation* topic (Phase 3) nor a *backbone* topic (Phase 6).
 
 **The problem is exposure bias.** At train time you condition on *real* past frames; at inference you condition on *your own* generated frames, whose errors compound until the world melts. That compounding is **drift**.
+### 9a — BUILD: inflate your image DiT into a video model
+
+You cannot study video rollout without a video model, and this plan has not given you one yet. **So build it — this is the step, not a preamble.**
+
+Two routes exist; you will take the cheap one:
+
+| Route | How | Used by |
+|---|---|---|
+| Train video from scratch | Native spatio-temporal architecture, video data from the start | Wan, HunyuanVideo, MIRA |
+| **Inflation** ⭐ | Take a **pretrained image** diffusion model, **insert temporal attention layers**, finetune on video. The image model supplies the entire visual prior; you only learn *motion* | AnimateDiff, GameNGen (SD 1.4), SwiftTry |
+
+**Inflation is the dominant practical recipe**, and it explains why so much of this field is built on Stable Diffusion checkpoints. It is also cheap — you finetune, you don't pretrain.
+
+**What you build:** take your **Phase 6 DiT** (or a small pretrained image model from Phase 7), insert temporal attention between the spatial blocks, **zero-init the temporal layers** so the model starts as its image self (the Phase 7 pattern again), and finetune on short clips. Something small and repetitive — a bouncing-ball sim, a toy maze walkthrough, or a low-res video subset.
+
+**Reference implementation to read *while* you build:** [`VinAIResearch/swift-try`](https://github.com/VinAIResearch/swift-try) (SwiftTry, arXiv 2412.10178). It is a video try-on paper, but three ingredients are general and it spells out the recipe you're implementing:
+
+1. **Two-stage inflation** — stage 1 pretrains the U-Nets on *image* data; stage 2 inflates with temporal layers and finetunes on *video*. Exactly your build.
+2. **A second conditioning branch** (their Garment U-Net) — the ControlNet/IP-Adapter pattern from Phase 7, but conditioning on a **reference image**. This is structurally how Matrix-Game 2.0 injects actions, so it's worth implementing as an optional extension: **add a reference-image conditioning branch to your inflated model.**
+3. **ShiftCaching** — a *different* speed strategy from KV caching: exploit overlap between sliding windows during **offline** generation. Knowing "make it fast" has an offline flavour too is worth the read.
+
+**Deliverable:** a video model you inflated yourself, generating temporally coherent short clips, with the zero-init check confirmed (before finetuning, does it reproduce your image model's outputs frame-by-frame?). Optionally, a reference-image conditioning branch.
+> *(SwiftTry also ships the **TikTokDress** dataset, built because existing sets were too easy — a small lesson in why data curation is half the work.)*
+
+### 9b — BUILD: make it causal
+
+Your inflated model has **bidirectional** temporal attention, so it cannot stream at any speed. Convert it.
+
+**First, run [`Live2Diff`](https://github.com/open-mmlab/Live2Diff)** — the **first** video diffusion model built with uni-directional temporal attention, and the smallest published instance of the conversion you're about to do. It ships **checkpoints**, a multi-timestep **KV cache**, TensorRT, and hits **16 FPS at 512² on an RTX 4090**.
+
+> ⚠️ **It is from July 2024 and has been superseded** — by CausVid, then Self-Forcing, then Causal Forcing. It is here for **readability and cost**, not currency. Read it as the clearest small example, not the state of the art.
+
+**Then do it to your own model:** replace bidirectional temporal attention with a **causal mask** (current frame attends to predecessors plus a few warm-up frames, never to the future), then add **KV caching** so past frames' K/V are reused instead of recomputed. The cache is only *correct* because the mask is causal — that dependency is the insight.
+
+**Deliverable:** your inflated model, now streaming. Report frames/sec **with and without** the KV cache — the gap is the whole point. Then profile where the per-frame time goes (encode / temporal attention / spatial attention / decode); that trace is what Phase 14 will act on.
+
+### 9c — BUILD: the forcing family and drift
 
 **Yes — all five rows below are ways to prevent drift, and they do build on each other.** Read the table as a single argument that gets progressively less ad-hoc:
 
@@ -487,11 +535,15 @@ This is the concept that turns an image diffusion model into a playable world mo
 > Items 1–2 are genuinely cheap and give you a publishable-shaped ablation on a model you already trained.
 
 **Deliverable:** your own small causal video diffusion model with per-frame noise levels + KV-cached streaming rollout, plus a **drift curve** (quality vs rollout length) comparing teacher-forcing / noise-augmented / diffusion-forcing / self-forcing on identical data.
-> Reference code: [`diffusion-forcing-transformer`](https://github.com/kwsong0113/diffusion-forcing-transformer) (small, academic scale — the tractable one), [`Self-Forcing`](https://github.com/guandeh17/Self-Forcing) (single 4090; note it *does* use `diffusers`), [`Causal-Forcing`](https://github.com/thu-ml/Causal-Forcing).
 
----
+**Remaining reference implementations for this sub-phase:**
 
-## Part F — Scale *(moved here on purpose)*
+| Repo | Date | Role |
+|---|---|---|
+| [`diffusion-forcing-transformer`](https://github.com/kwsong0113/diffusion-forcing-transformer) | 2025 | Diffusion forcing at academic scale — per-frame noise levels + History Guidance. **The closest match to what you are building** |
+| [`Self-Forcing`](https://github.com/guandeh17/Self-Forcing) | 2025 | **The one to implement.** Single 4090; note it *does* use `diffusers` |
+| [`Causal-Forcing`](https://github.com/thu-ml/Causal-Forcing) | 2026 | Read only — the production-hardened successor, what `minWM` packages |
+
 
 ### Phase 10 — Distributed training (the employability multiplier)
 > **Why here and not at the end:** the plan's own rule is "distributed training only once a model doesn't fit or trains too slow." Phase 11 (MIRA) is the **first** thing on this path that genuinely requires multiple GPUs — MIRA's own repo launches with `torchrun`. Learning DDP/FSDP immediately before you need it means you learn it against a real constraint instead of a toy.
@@ -919,48 +971,67 @@ If you want something more original than the auxiliary-supervision ablation, LaW
 
 ## Part J — Real-time video products
 
-### Phase 19 — Decart-class real-time streaming *(the last chapter, and it depends on almost everything before it)*
+### Phase 19 — Decart-class real-time streaming *(assembly, not new ideas)*
 
-Decart, Runway's live modes, Odyssey — the "restyle a live camera feed at 20+ fps" product category. This chapter is last because it **consumes** most of the plan: causal attention (Phase 9), few-step distillation (Phase 12), KV-cache kernels (Phase 14), and streaming serving (Phase 15b). It is where those stop being separate skills.
+Decart, Runway's live modes, Odyssey — the "restyle a live camera feed at 20+ fps" category. **This chapter adds no new mechanism.** Every component was taught earlier; the lesson here is that shipping one is an *integration and economics* problem, and that is why it comes last.
 
-**The core insight, restated from the handbook's Part VI:** a bidirectional video model **cannot stream at any speed** — the dependency structure is wrong, not the throughput. Frame *t* attends to frame *t+300*, which does not exist yet. **Real-time requires a causal architecture, not a faster one.** So every system in this category has performed the same conversion: *bidirectional → causal → few-step → fused kernels*.
-
-**And why video-to-video ships before free generation:** V2V conditions each frame on a **fresh camera frame from outside the feedback loop**, so drift can never accumulate past one step's worth. Structure is re-supplied every 40 ms and is never the model's to remember; only style intensity can drift, and that is cosmetic. T2V has no such anchor. (Phase 9's drift material, applied.)
-
-#### Do this one: **Live2Diff**
-
-[`open-mmlab/Live2Diff`](https://github.com/open-mmlab/Live2Diff) — *Live Stream Translation via Uni-directional Attention in Video Diffusion Models*. The **first** video diffusion model built with uni-directional temporal attention, and the cheapest possible hands-on with the whole pattern.
-
-| Why it fits | |
+| Component | Learned in |
 |---|---|
-| **Uni-directional temporal attention** | Correlates the current frame with predecessors + a few warm-up frames, **no future frames**. This *is* the bidirectional→causal conversion, in a small readable codebase |
-| **Multi-timestep KV cache** | Because later frames can't influence earlier ones, K/V from generated frames are reusable — no recomputation. Phase 14's target, already implemented |
-| **16 FPS at 512×512 on an RTX 4090** | **Consumer hardware.** No H100, no B200 |
-| **TensorRT support** | Connects straight to Phase 14/15 |
-| Ships | Code, **checkpoints**, a Colab, depth-prior conditioning, DreamBooth/LoRA compatibility |
+| Causal / uni-directional attention + KV cache | **Phase 9** (Live2Diff, Self-Forcing) |
+| Few-step distillation | **Phase 12** |
+| Fused kernels, CUDA graphs, TensorRT | **Phase 14** |
+| Session-affine streaming serving, frame-deadline metrics | **Phase 15b** |
 
-**Deliverable:** run it on a webcam feed; profile where the 60 ms goes (encode / denoise / decode / cache); ablate the KV cache off and watch the frame rate collapse; then measure the **frame-deadline hit rate** from Phase 15b. That single exercise ties Phases 9, 14 and 15 together on hardware you may already own.
+**The two structural facts that define the category:**
 
-#### On the two virtual try-on papers
+**1. Real-time is an architecture property, not a speed property.** A bidirectional model cannot stream at *any* speed, because frame *t* attends to frames that do not exist yet. **Distillation does not fix this** — the dependency structure is wrong, not the throughput. Hence every system in this category performed the same conversion: *bidirectional → causal → few-step → fused*.
 
-Both are **video try-on** — a *task*, not a technique. Judge them by what they'd teach you that this plan doesn't already:
+**2. Video-to-video ships before free generation, and drift is why.** V2V conditions each frame on a **fresh camera frame from outside the feedback loop**, so error cannot accumulate past one step's worth. Structure, pose and layout are re-supplied every 40 ms and are never the model's to remember — only style intensity can drift, and that is cosmetic. T2V has no such anchor, so it is a random walk with positive feedback. **This is why restyling products exist and open-ended real-time generation does not.**
 
-| Paper | Verdict | Reasoning |
+**The assembly exercise:** take an open bidirectional backbone (Wan 2.1-1.3B), make it causal, distil to few-step, fuse and cache, serve with session affinity. Live2Diff, CausVid and Self-Forcing are all prior art for that exact pipeline — **you are not inventing it**, which cuts the risk substantially.
+
+**Then do the economics, because that is the part nobody teaches.** Measure:
+- **frame-deadline hit rate** — what fraction of frames landed inside budget
+- **time-to-first-frame** — the number users actually feel
+- **GPU-seconds per session-minute** → **cost per user-hour**
+
+That last number decides whether the thing is a product or a demo. Recall from Phase 15b that published systems land at ~1 session per GPU *by construction*, so cost per user is roughly the cost of a GPU-hour. **Run that arithmetic before building anything.**
+
+> **What "co-designed against silicon" means, and why a checkpoint can't give it to you.** Head dimension, hidden width, layer count, history-window size and VAE compression ratio are all *latency* decisions welded into the weights. Fine-tuning changes weight *values*; it cannot change the *shape*, and the shape is what determines latency. That inverts normal practice: instead of "hit this quality bar, then optimise latency," you fix the frame budget as a hard wall, search architectures that fit under it, and take the highest quality among survivors. It is the clearest example in the whole plan of systems constraints dictating model design.
+
+> *(Video try-on — SwiftTry, MagicTryOn — moved to Phase 9, where inflation and reference-image conditioning actually belong. **MagicTryOn stays skipped**: 14B/16B, not real-time, no new mechanism.)*
+
+---
+
+## Milestone papers by phase
+
+**How to use this:** the ⭐ entries are the ones to read properly — they change how you think. The rest are lookups for when a phase raises a specific question. Papers marked ✅ were verified during planning; the rest are standard references, so double-check exact author/year before citing.
+
+| Phase | Read properly ⭐ | Also worth knowing |
 |---|---|---|
-| **SwiftTry** (code, weights, training + inference) | ⏭ **Optional** | A well-packaged **application** of video editing with temporal consistency. Worth doing only if garment try-on is a product direction you care about. The underlying techniques are already covered |
-| **MagicTryOn** (code, weights, inference; 14B/16B class) | ❌ **Skip** | Higher garment fidelity, **not real-time**. It optimises the axis this plan deliberately trades away, and a 14B/16B system is an expensive detour that teaches no new architecture |
+| **1** Build & prove | ⭐ **DDPM** (Ho et al.) — the ε-parameterisation and simplified loss you're implementing | Sohl-Dickstein 2015 (the origin, ignored for 5 years); NCSN (Song & Ermon) |
+| **2** GPU literacy | ⭐ **Roofline** (Williams et al.) — arithmetic intensity vs the ridge; the mental model for all of Part H | PyTorch Profiler docs |
+| **3** The four formulations | ⭐ **EDM** (Karras et al. 2022) — the best-written paper in the field, and what Diamond uses. ⭐ **DDIM** (Song et al.) — a *sampler*, not a model. ⭐ **SD3** (Esser et al. 2024) — logit-normal timesteps + resolution shift | Score-SDE (Song et al. 2021, the unification + probability-flow ODE); Flow Matching (Lipman et al.); Rectified Flow (Liu et al.); Kingma & Gao 2023 (all objectives are one weighted integral over log-SNR); "Common Diffusion Noise Schedules Are Flawed" (terminal-SNR bug) |
+| **4** Metrics | ⭐ **Precision & Recall for generative models** (Kynkäänniemi et al.) — the instrument that catches everything FID hides | FID (Heusel et al.); Inception Score (Salimans et al.); Density & Coverage (Naeem et al.); clean-fid (Parmar et al.); LPIPS (Zhang et al.) |
+| **5** Latent space | ⭐ **Latent Diffusion / Stable Diffusion** (Rombach et al. 2022). ⭐ ✅ **RAE — Diffusion Transformers with Representation Autoencoders** (Zheng, Ma, Tong, Xie) — frozen DINO + ViT decoder | VQ-VAE (van den Oord et al.); REPA (representation alignment); DINOv2 / DINOv3 |
+| **6** DiT | ⭐ **DiT — Scalable Diffusion Models with Transformers** (Peebles & Xie) — patch size as the compute knob, adaLN-Zero, the scaling curve | MMDiT (SD3); U-ViT (long skips); RoPE (Su et al.); FlashAttention (Dao et al.) |
+| **7** Ecosystem & conditioning | ⭐ **Classifier-Free Guidance** (Ho & Salimans) — load-bearing, not a knob. ⭐ **ControlNet** (Zhang et al.) — zero-init clone of a frozen encoder | Classifier guidance (Dhariwal & Nichol); IP-Adapter; T2I-Adapter; LoRA (Hu et al.) |
+| **8** World models | ⭐ ✅ **DIAMOND** (Alonso et al. 2024) — 13M params, 1.46 HNS, "visual details matter". ⭐ ✅ **IRIS** (Micheli, Alonso, Fleuret) — the discrete-token counterargument, same lab. ⭐ **DreamerV3** (Hafner et al.) — the RSSM lineage | **World Models** (Ha & Schmidhuber 2018 — where the whole idea starts); ✅ GameNGen; ✅ JEPA-WMs (Terver et al., FAIR); V-JEPA 2; STORM; TWM |
+| **9** Video + causal rollout | ⭐ **AnimateDiff** (Guo et al.) — inflation, the recipe you build in 9a. ⭐ ✅ **Live2Diff** (Xing et al. 2024) — first uni-directional video diffusion, what you read in 9b. ⭐ ✅ **Diffusion Forcing** (Chen et al. 2024). ⭐ ✅ **Self-Forcing** (2025) | Video Diffusion Models (Ho et al.); ✅ SwiftTry (two-stage inflation + reference-image branch); CausVid; ✅ Causal Forcing (thu-ml, ICML 2026) |
+| **10** Distributed | ⭐ **ZeRO** (Rajbhandari et al.) — the sharding idea behind both DeepSpeed and FSDP. ⭐ **PyTorch FSDP** (Zhao et al.) | Megatron-LM (tensor parallel); GPipe (pipeline parallel); Goyal et al. 2017 (linear scaling rule + warmup) |
+| **11** MIRA | ⭐ ✅ **MIRA** (General Intuition + Kyutai + Epic) — read alongside the RAE paper from Phase 5, since the codec is the credited result | ✅ minWM (the pluggable framework); Wan 2.1/2.2 technical reports |
+| **12** Distillation | ⭐ **DMD2** (Yin et al.) — the workhorse. ⭐ **Consistency Models** (Song et al.). ⭐ **LCM-LoRA** (Luo et al.) — distillation as a swappable adapter | Progressive Distillation (Salimans & Ho); ADD/SDXL-Turbo & LADD (Sauer et al.); sCM; MeanFlow; Shortcut Models (Frans et al.); guidance distillation (Meng et al.); ✅ "Few-Step Distillation for T2I: A Practical Guide" |
+| **13** Sweeps | ⭐ **ASHA** (Li et al.) — asynchronous successive halving; why early stopping dominates | Hyperband; Optuna (Akiba et al.); Population-Based Training (Jaderberg et al.) |
+| **14** Kernels | ⭐ **FlashAttention** 1 → 2 → 3 (Dao et al.; Shah et al.) — read as a trilogy; FA-3 is a Hopper rewrite. ⭐ **Triton** (Tillet et al.) | Roofline (again — it's the same argument); TorchInductor / `torch.compile` design docs |
+| **15** Quantise + serve | ⭐ **Q-Diffusion** (Li et al.) — why diffusion quantisation is harder than LLM quantisation | PTQD; SVDQuant (4-bit); SmoothQuant; LLM.int8() (Dettmers et al.) |
+| **16** Memory & multiplayer | ⭐ ✅ **MultiGen** (Po et al. 2026) — symbolic memory + ray-traced disparity conditioning; the capstone target. ⭐ ✅ **Matrix-Game 3.0** — camera-aware retrieval + Plücker encoding | ✅ Matrix-Game 2.0; ✅ Oasis; ✅ LingBot-World; Genie 3 (closed, reference point) |
+| **17** Latent actions | ⭐ ✅ **Genie** (Bruce et al., ICML 2024 best paper) — the VQ latent-action codebook. ⭐ ✅ **LAPO / "Learning to Act without Actions"** (Schmidt & Jiang) — the one you run | **VPT** (Baker et al.) — inverse dynamics model trained on a *small* labelled set, the pragmatic alternative; ✅ CLAM (continuous, robotics); ILPO (Edwards et al., the early version of this idea) |
+| **18** Physics | ⭐ ✅ **LaWM** (Xiao & Ghaffari) — a learned discrete Lagrangian *as* the transition rule. ⭐ **Hamiltonian Neural Networks** (Greydanus et al.) — the cleanest intro to structure-preserving nets | Lagrangian Neural Networks (Cranmer et al.); PINNs (Raissi et al.); Marsden & West on variational integrators (the classical basis); ✅ PhyWorldBench / Physics-IQ / PhyGenBench / VideoPhy-2; ✅ LaMo, PhysisForcing, TeleBoost |
+| **19** Real-time products | ⭐ **StreamDiffusion** (Kodaira et al.) — the pipelining and batching tricks for interactive diffusion | Decart's MirageLSD write-up; ✅ Self-Forcing / CausVid (again — the same conversion) |
 
-> **The distinction worth internalising: Live2Diff is a *technique* paper, the try-on papers are *task* papers.** Techniques transfer to everything you build afterwards; tasks transfer only to that task. With limited time, do the technique. If you later want a try-on product, SwiftTry becomes the right starting point — and you will be better at it for having done Live2Diff first.
-
-**If you want the full product path** (this is the handbook's Part VI build plan): take an open bidirectional backbone (Wan 2.1-1.3B), make it causal (Phase 9), distil to few-step (Phase 12), fuse and cache (Phase 14), serve with session affinity (Phase 15b). Live2Diff, CausVid and Self-Forcing are all prior art for exactly that pipeline — **you are not inventing it**, which cuts the risk enormously.
-
----
+> **Two papers outside any single phase that are worth reading early:** **Ha & Schmidhuber, "World Models" (2018)** — the paper that named the field, and short. And **Karras et al., EDM (2022)** — read it twice; the clarity is instructive independent of the content.
 
 
-
-
-
----
 
 ## Tooling, orchestration & deployment (reference)
 
