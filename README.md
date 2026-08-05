@@ -1,6 +1,6 @@
 # diffusion-learning
 
-Learning diffusion models end-to-end — from the DDPM math to interactive world models — by **building each piece from scratch** rather than calling into a framework. Structured as a 17-phase plan with two anchor projects: **DIAMOND** (to understand) and **MIRA** (to be current).
+Learning diffusion models end-to-end — from the DDPM math to interactive world models — by **building each piece from scratch** rather than calling into a framework. Structured as a 19-phase plan with two anchor projects: **DIAMOND** (to understand) and **MIRA** (to be current).
 
 The goal is a specific, uncommon combination: **model understanding + systems literacy**. Most people who know diffusion can't read a profiler trace; most people who can read a profiler trace can't explain EDM preconditioning.
 
@@ -10,7 +10,7 @@ The goal is a specific, uncommon combination: **model understanding + systems li
 
 | File | What it is |
 |---|---|
-| **[`LEARNING_PLAN.md`](LEARNING_PLAN.md)** | **The roadmap.** 17 phases in 9 parts, with datasets, hardware, and per-phase cost estimates. Read this first |
+| **[`LEARNING_PLAN.md`](LEARNING_PLAN.md)** | **The roadmap.** 19 phases in 10 parts. Each phase states the one transferable **lesson** it exists to teach, plus datasets, hardware, cost estimates, and the milestone papers worth reading. Read this first |
 | **[`diffusion-handbook.pdf`](diffusion-handbook.pdf)** | **The reference.** 84 pages, Parts I–X — the probabilistic core, training/sampling/distillation recipes, inference optimisation, real-time video, world models, evaluation, and a corrections log |
 | [`diffusion/`](diffusion/) | **The code.** A production-shaped diffusion package built from scratch. See its own [README](diffusion/README.md) |
 | [`diamond/`](diamond/) | Vendored [DIAMOND](https://github.com/eloialonso/diamond) — read-only reference for Phase 8 |
@@ -42,11 +42,12 @@ Notable result from getting there: sampling was silently broken while the loss c
 | **B** Fundamentals + GPU | **2** GPU + profiler · **3** DDPM/DDIM/EDM/rectified-flow race · **4** metrics suite |
 | **C** Modern architecture | **5** what space diffusion runs in (VAE / VQ / representation autoencoder) · **6** build a DiT |
 | **D** Ecosystem | **7** HuggingFace, CFG, ControlNet, LoRA, open weights |
-| **E** World models | **8** DIAMOND train→play, paired with IRIS · **9** the forcing family (drift) |
+| **E** World models | **8** DIAMOND train→play, paired with IRIS · **9** video models + causal rollout — **9a** inflate your DiT into a video model, **9b** make it causal (KV cache), **9c** the forcing family + drift |
 | **F** Scale | **10** DDP → FSDP, 1→8 GPU scaling study, one Vertex job |
 | **G** Current stack | **11** MIRA end-to-end, single-player first |
 | **H** Make it fast | **12** distillation · **13** sweeps · **14** kernels · **15** quantise + serve |
-| **I** Frontier | **16** memory & multiplayer · **17** latent actions (Genie, LAPO) |
+| **I** Frontier | **16** memory & multiplayer **+ capstone** · **17** latent actions (Genie, LAPO) · **18** physics (benchmarks, LaWM) |
+| **J** Real-time products | **19** Decart-class streaming — assemble causal + distilled + fused + served |
 
 Roughly **$350–750** of cloud compute through Phase 10. Phase 11 is the cost cliff.
 
@@ -70,7 +71,7 @@ python scripts/sample.py --ckpt runs/overfit_cifar/latest.pt --sampler ddim --st
 
 **Course materials** — `lecture_*.pdf`, `Lecture_1.pdf`, `midterm*.pdf`, `exam_final.pdf`, `final-solutions.pdf`, `diffusion-derivation.html`.
 
-**Reference papers** — `v2v.pdf`, `orthogonalAdaptation.pdf`, `flightDiffusion.pdf`, `imitating image-image.pdf`.
+**Reference papers** — `Papers/DinoRAE.pdf` (representation autoencoders — Phase 5 and Phase 11), plus `v2v.pdf`, `orthogonalAdaptation.pdf`, `flightDiffusion.pdf`, `imitating image-image.pdf`.
 
 ---
 
@@ -80,4 +81,4 @@ python scripts/sample.py --ckpt runs/overfit_cifar/latest.pt --sampler ddim --st
 
 That standard is not aspirational: MIRA — a 5B-parameter frontier world model — ships the same shape (`configs/ src/ tests/ scripts/`, Hydra, `torchrun`, `wandb`, `ruff`, `pytest`).
 
-> **Phase numbering changed on 2026-07-28**, from a fractional scheme to integers 1–17. Older notes and commit messages use the old names; the mapping is `0−→1, 0→2, 0.5→3, 0.75→4, 0.9→5, 0.95→6, 1→8, 1.5→9, 2→12, 2.5→13, 3→15, 4→10`.
+> **Phase numbering changed on 2026-07-28**, from a fractional scheme to integers 1–19. Older notes and commit messages use the old names; the mapping is `0−→1, 0→2, 0.5→3, 0.75→4, 0.9→5, 0.95→6, 1→8, 1.5→9, 2→12, 2.5→13, 3→15, 4→10`.
