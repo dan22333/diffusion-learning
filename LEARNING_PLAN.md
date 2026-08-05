@@ -668,16 +668,23 @@ Build **one custom inference container** (FastAPI + your model, or Triton Infere
 > The consequence: batching more users does not discover idle math units, because they were already busy. Memory is usually fine — a small distilled model could *fit* 20 sessions. You just cannot *compute* them inside the frame deadline. The arithmetic:
 >
 > ```
-> frame budget = 40 ms (25 fps)      sessions per GPU ≈ 40 ms / single-stream latency
+> sessions per GPU ≈ frame budget / single-stream latency        (40 ms at 25 fps)
 > ```
 >
-> | Single-stream latency | Sessions per GPU |
-> |---|---|
-> | 30 ms — undistilled, large | **1** (no headroom at all) |
-> | 8 ms — distilled to 3–4 steps | ~4 |
-> | 3 ms — distilled + fused kernels, small model | ~10 |
+> **The published numbers are all ≈1 session per GPU** — and the reason is instructive:
 >
-> **So sessions-per-GPU is an *output* of Phases 12 and 14, not an infrastructure decision.** The same work that gets you under the frame deadline is what lets you amortise a GPU across users — distillation and kernels change your serving *economics*, not just your latency. Diamond at Atari resolution would batch many sessions trivially; MIRA at 576p would not.
+> | System | Reported | Sessions/GPU |
+> |---|---|---|
+> | **MultiGen** | ~20 FPS, **one A100 per player** | 1 |
+> | **MIRA** | 4 views, 576p, 20 fps on **one B200** | ~1 (the 4 views are one joint forward pass, not 4 sessions) |
+> | **Matrix-Game 2.0** | 25 FPS on **one H100**, 352×640, 3 steps | 1 |
+> | Decart-class (handbook Part VI) | 41 ms budget; **~30 ms is the denoise** of a distilled 14B DiT | 1 |
+>
+> **They all land at 1 because labs tune the architecture until one stream *fills* the budget** — that is the co-design loop in the handbook's Part VI. Any spare headroom gets spent on **quality**, never left idle. So:
+>
+> **Multiple sessions per GPU is a deliberate quality-for-density trade, not a free win.** You get it by choosing a model *smaller than your GPU could support*: Diamond at 64×64 Atari with a 13M-parameter UNet costs milliseconds per frame and would batch many sessions trivially; MIRA at 576p will not, ever, on that hardware. **Which means sessions-per-GPU is a product decision** (cost per user vs fidelity), informed by — but not determined by — the distillation and kernel work in Phases 12 and 14.
+>
+> Two caveats on the formula: batching is not perfectly linear (some parallelism remains even when compute-bound), and you must subtract the time spent *assembling* the batch, which is real when the whole budget is 40 ms.
 > - It has a **frame deadline** (~40 ms), not a throughput target.
 >
 > That is not a web-service shape, it is a **game-server** shape — long-lived, sticky, session-per-GPU. Which is exactly the workload Kubernetes handles well and serverless does not. Note the symmetry with Phase 10's RL exception: **K8s earns its keep on heterogeneous and stateful workloads, never on bounded training jobs.**
@@ -784,7 +791,22 @@ MIRA's choice to withhold physics state is a **design decision, not a necessity*
 
 **Do a cheap version first.** Build a toy 2D physics environment you fully control (`pymunk` or hand-rolled — bouncing balls, gravity, collisions), where state is exact and free. Train a small world model with and without the auxiliary head. If the effect is real, it will show up there for tens of dollars, and only then is it worth Phase 11 money.
 
-⚠️ **Prior art — read before claiming novelty.** Physics-aware training is active: **LaWM** places a *least-action* (Lagrangian) principle inside the latent transition rather than using an auxiliary loss; **LaMo** learns self-supervised latent motion priors; **PhysisForcing** concentrates supervision on physics-informative regions; **TeleBoost** adds an auxiliary motion-prediction branch supervised by optical flow. So *"auxiliary physics objectives"* is not a novel technique. **What is open is the specific ablation** — a controlled test of a published system's stated design choice, on its own released data. That is a legitimate contribution shape, and an honest one to claim.
+⚠️ **Prior art — read before claiming novelty.** Physics-aware training is active, and the four below are worth knowing because they occupy *different* positions on one spectrum: **how deeply is physics wired in?**
+
+| Paper | Where physics enters | What it showed |
+|---|---|---|
+| **TeleBoost** | **Auxiliary branch** — predicts inter-frame motion, supervised by optical flow extracted from the training data | Shallowest form: physics as a side task. Free supervision, since flow is computed not labelled |
+| **PhysisForcing** | **Where supervision is applied** — concentrates it on *physics-informative regions* rather than spreading it uniformly, jointly at pixel and semantic level | You can improve physics by reweighting *where* the loss looks, without changing the objective |
+| **LaMo** | **A learned prior added as guidance** — self-supervised latent motion priors from unlabelled video, bolted onto an existing generator | Improves physical consistency without substantially modifying the base model. ⚠️ *I have only a thin read on this one — no concrete numbers verified* |
+| **LaWM** | **Inside the transition rule itself** — deepest | See below |
+
+**LaWM is the one to read properly**, because it is the cleanest instance of a physics-informed-DL idea transferred to a world model. Instead of scoring a finished rollout, it makes a **learned discrete Lagrangian** the transition rule: encode observations to latent coordinates, learn a discrete Lagrangian over pairs of consecutive latent states, and let the **discrete Euler–Lagrange equation** — the stationarity condition of the action — *define* the next state, solved by a small differentiable solver (~4 iterations). In their words, the action functional's *"stationarity condition provides the equation that will determine each next latent state."* Physics generates the prediction rather than grading it.
+
+What it showed: on 12 canonical dynamics (uniform motion, acceleration, parabolic, rotation, damped oscillation, deformation) it was best or second-best on nearly all metrics, with the largest gains on **Physical Invariance Score** — e.g. acceleration PIS **0.657 → 0.896** — plus reduced energy drift and stability past **200 frames**. On embodied robot video: LPIPS 0.1259 → 0.1138, PSNR 21.85 → 22.42, depth AbsRel 0.36 → 0.328. Its ablation is the load-bearing result: **the variational transition beat gradient-based trajectory refinement on 14 of 17 PIS metrics** — i.e. building the principle *in* beats correcting afterwards.
+
+Its limitations are equally instructive: the formulation assumes **unforced, non-dissipative** dynamics, so damped oscillation and deformation are *weaker* than baselines; contact and actuation remain hard; and the DEL solve is approximate. It also does not claim its latents are true physical states — only "dynamics-aware coordinates."
+
+**So *"auxiliary physics objectives"* is not a novel technique** — TeleBoost and LaMo already occupy that ground. **What is open is the specific ablation:** a controlled test of a published system's stated design choice, on its own released data, with ground-truth state available. That is a legitimate contribution shape and an honest one to claim. If you want a *harder* and more original swing, the LaWM direction — structure inside the transition — is the more interesting one, and its stated limitations (dissipation, contact) are exactly where a game world model with collisions would stress it.
 
 **Physics-informed DL concepts worth borrowing, ranked by transferability:**
 
