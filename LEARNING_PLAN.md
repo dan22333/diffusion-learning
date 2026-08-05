@@ -122,7 +122,8 @@ diffusion/
 | **F — Scale (needed *before* MIRA)** | **10** DDP → FSDP, single-node → multi-node, **+ one Vertex job** | 8×GPU → cluster |
 | **G — Reproduce the current stack** | **11** MIRA end-to-end | multi-GPU |
 | **H — Make it fast, then ship it** | **12** distillation · **13** sweeps · **14** kernels · **15** quantize + serve | — |
-| **I — Frontier** | **16** memory & multiplayer (MultiGen, Matrix-Game, LingBot) · **17** latent actions (Genie read, **LAPO run**) | — |
+| **I — Frontier** | **16** memory & multiplayer (MultiGen, Matrix-Game, LingBot) · **17** latent actions (Genie read, **LAPO run**) · **18** physics (benchmarks, **LaWM**) | — |
+| **J — Real-time products** | **19** Decart-class streaming (**Live2Diff** on a 4090) | 1×GPU |
 
 ---
 
@@ -747,76 +748,7 @@ And you already have the host: **Diamond gives you the diffusion rollout loop *a
 
 **And it is the point where GKE finally earns its keep** (Phase 15b) — you would have genuinely concurrent, stateful, session-affine workloads to orchestrate.
 
-### Physics: the third axis, and the one where world models are most obviously broken
-
-Stability and memory are not enough. A model can never diverge, remember the room perfectly, and still have **nonsense physics** — the ball falls wrong, the collision rebounds wrong, objects pass through each other. **Visual plausibility and physical correctness are different properties**, and the gap between them is the current research frontier.
-
-| Axis | Question | Test |
-|---|---|---|
-| **Temporal stability** | Does it degrade as I roll out? | drift curve (Phase 9) |
-| **Spatial memory** | Is the room still the *same* room? | loop closure (above) |
-| **Physical plausibility** | Does the ball fall correctly? Does the collision rebound right? | **this section** |
-
-**The benchmarks — and their flaws, which are the real lesson:**
-
-| Benchmark | Coverage | Known weakness |
-|---|---|---|
-| **PhyWorldBench** (NVIDIA **Cosmos Lab**) | fundamental motion → rigid-body interaction → human/animal motion | the Cosmos-adjacent one; broad difficulty levels |
-| **Physics-IQ** | 66 image-to-video scenarios; pixel metrics (spatial + spatiotemporal IoU, MSE) | ⚠️ **presupposes a single ground-truth trajectory** — so it penalises legitimate camera motion *and* physically valid stochastic outcomes like rebound angles and splash patterns |
-| **PhyGenBench** | 160 prompts across **27 physical laws** | three-stage cascaded binary scoring — classification errors compound across stages |
-| **VideoPhy-2** | ~590–688 prompts, 12 human annotators | only two coarse axes, **no per-law decomposition** |
-
-> **The methodological lesson is worth more than any score.** A physics benchmark must decide whether physics is *deterministic*. Physics-IQ assumes one correct future, so it marks a model down for producing a **different but equally valid** rebound. That is the same error as judging a generative model by FID alone: **you cannot evaluate a stochastic process against a single reference.** Expect to report a distribution or a law-by-law breakdown, not one scalar.
-
-**The strongest test you'll have costs nothing extra — MIRA's trick.** The Rocket Science dataset ships the underlying **physics state** (ball and car positions, velocities) alongside the frames and actions. MIRA deliberately **does not train on it** — the model "only ever sees pixels and actions" — and holds the state back **purely for evaluation**. So you can ask *"is the ball where real physics says it should be?"* rather than *"does this look plausible?"*
-
-That is a **ground-truth physics probe on data you already have in Phase 11**, and it is far stronger than any prompt-based benchmark. The general technique is worth stealing: **withhold a privileged signal from training so it becomes a clean evaluation instrument.**
-
-**Deliverable:** a per-rollout-step physics-error curve for your Phase 11 model using the withheld state, alongside the drift curve. Two curves, two axes, same rollout.
-
-### Research project (optional): does physics supervision actually help?
-
-MIRA's choice to withhold physics state is a **design decision, not a necessity** — and the data to test it ships with the model. That makes a clean, genuinely open question:
-
-> **Does using the withheld physics state as auxiliary supervision improve long-rollout physical consistency — and at what cost to appearance?**
-
-**The experiment** (one variable):
-
-| Variant | Training signal |
-|---|---|
-| **A — baseline** | pixels + actions (MIRA as published) |
-| **B — physics-supervised** | pixels + actions **+ an auxiliary head predicting ball/car position and velocity**, with a loss weight to sweep |
-
-**Measure:** physics error vs rollout step (using held-out state), the drift curve, and image quality (FID / LPIPS). **Hypothesis:** auxiliary physics supervision shapes the latent to encode dynamics rather than appearance, improving long-horizon physical consistency at some cost to visual detail — and the loss weight traces that trade-off.
-
-**Do a cheap version first.** Build a toy 2D physics environment you fully control (`pymunk` or hand-rolled — bouncing balls, gravity, collisions), where state is exact and free. Train a small world model with and without the auxiliary head. If the effect is real, it will show up there for tens of dollars, and only then is it worth Phase 11 money.
-
-⚠️ **Prior art — read before claiming novelty.** Physics-aware training is active, and the four below are worth knowing because they occupy *different* positions on one spectrum: **how deeply is physics wired in?**
-
-| Paper | Where physics enters | What it showed |
-|---|---|---|
-| **TeleBoost** | **Auxiliary branch** — predicts inter-frame motion, supervised by optical flow extracted from the training data | Shallowest form: physics as a side task. Free supervision, since flow is computed not labelled |
-| **PhysisForcing** | **Where supervision is applied** — concentrates it on *physics-informative regions* rather than spreading it uniformly, jointly at pixel and semantic level | You can improve physics by reweighting *where* the loss looks, without changing the objective |
-| **LaMo** | **A learned prior added as guidance** — self-supervised latent motion priors from unlabelled video, bolted onto an existing generator | Improves physical consistency without substantially modifying the base model. ⚠️ *I have only a thin read on this one — no concrete numbers verified* |
-| **LaWM** | **Inside the transition rule itself** — deepest | See below |
-
-**LaWM is the one to read properly**, because it is the cleanest instance of a physics-informed-DL idea transferred to a world model. Instead of scoring a finished rollout, it makes a **learned discrete Lagrangian** the transition rule: encode observations to latent coordinates, learn a discrete Lagrangian over pairs of consecutive latent states, and let the **discrete Euler–Lagrange equation** — the stationarity condition of the action — *define* the next state, solved by a small differentiable solver (~4 iterations). In their words, the action functional's *"stationarity condition provides the equation that will determine each next latent state."* Physics generates the prediction rather than grading it.
-
-What it showed: on 12 canonical dynamics (uniform motion, acceleration, parabolic, rotation, damped oscillation, deformation) it was best or second-best on nearly all metrics, with the largest gains on **Physical Invariance Score** — e.g. acceleration PIS **0.657 → 0.896** — plus reduced energy drift and stability past **200 frames**. On embodied robot video: LPIPS 0.1259 → 0.1138, PSNR 21.85 → 22.42, depth AbsRel 0.36 → 0.328. Its ablation is the load-bearing result: **the variational transition beat gradient-based trajectory refinement on 14 of 17 PIS metrics** — i.e. building the principle *in* beats correcting afterwards.
-
-Its limitations are equally instructive: the formulation assumes **unforced, non-dissipative** dynamics, so damped oscillation and deformation are *weaker* than baselines; contact and actuation remain hard; and the DEL solve is approximate. It also does not claim its latents are true physical states — only "dynamics-aware coordinates."
-
-**So *"auxiliary physics objectives"* is not a novel technique** — TeleBoost and LaMo already occupy that ground. **What is open is the specific ablation:** a controlled test of a published system's stated design choice, on its own released data, with ground-truth state available. That is a legitimate contribution shape and an honest one to claim. If you want a *harder* and more original swing, the LaWM direction — structure inside the transition — is the more interesting one, and its stated limitations (dissipation, contact) are exactly where a game world model with collisions would stress it.
-
-**Physics-informed DL concepts worth borrowing, ranked by transferability:**
-
-| Concept | How it transfers | Feasibility |
-|---|---|---|
-| **Auxiliary state prediction** | Predict physical quantities as a side task | ✅ easy — the project above |
-| **Conservation-law regularisers** | Penalise energy/momentum violation on decoded trajectories | ✅ tractable in a toy env with known laws |
-| **Least action / Lagrangian structure** (LaWM) | Build the variational principle into the latent transition | ⚠️ elegant, harder — read LaWM first |
-| **Equivariance / symmetry** | Translating the scene should translate the prediction; conservation laws follow from symmetries (Noether) | ⚠️ architectural surgery |
-| **PINN-style PDE residuals** | Add the governing equation to the loss | ❌ needs a known PDE — fine for fluids, not for "a car hits a ball" |
+> **There is a third axis — physical plausibility — and it gets its own chapter.** A model can be perfectly stable, remember the room exactly, and still have nonsense physics. See **Phase 18**.
 
 **How to evaluate any of this — the two axes need two different tests:**
 - **Drift** → the **drift curve** from Phase 9 (quality vs rollout position).
@@ -875,6 +807,157 @@ Output: latent-action policies, a world model, and an IDM — all from video. Th
 | **CLAM** | **continuous** | robotics | continuous control — joint torques, manipulation. A codebook of 8 actions is the wrong prior here |
 
 **Deliverable:** LAPO trained on 2–3 Procgen tasks, with the recovered latent action space compared against the true action space (does code 3 reliably mean "jump"?), plus a written account of how Genie's codebook and LAPO's bottleneck are the same mechanism.
+
+### Phase 18 — Understanding physics in world models *(the third evaluation axis)*
+
+Stability and memory are not enough. A model can never diverge, remember the room perfectly, and still have **nonsense physics** — the ball falls wrong, the collision rebounds wrong, objects pass through each other. **Visual plausibility and physical correctness are different properties**, and the gap between them is the current research frontier.
+
+| Axis | Question | Test |
+|---|---|---|
+| **Temporal stability** | Does it degrade as I roll out? | drift curve (Phase 9) |
+| **Spatial memory** | Is the room still the *same* room? | loop closure (Phase 16) |
+| **Physical plausibility** | Does the ball fall correctly? Does the collision rebound right? | **this section** |
+
+**The benchmarks — and their flaws, which are the real lesson:**
+
+| Benchmark | Coverage | Known weakness |
+|---|---|---|
+| **PhyWorldBench** (NVIDIA **Cosmos Lab**) | fundamental motion → rigid-body interaction → human/animal motion | the Cosmos-adjacent one; broad difficulty levels |
+| **Physics-IQ** | 66 image-to-video scenarios; pixel metrics (spatial + spatiotemporal IoU, MSE) | ⚠️ **presupposes a single ground-truth trajectory** — so it penalises legitimate camera motion *and* physically valid stochastic outcomes like rebound angles and splash patterns |
+| **PhyGenBench** | 160 prompts across **27 physical laws** | three-stage cascaded binary scoring — classification errors compound across stages |
+| **VideoPhy-2** | ~590–688 prompts, 12 human annotators | only two coarse axes, **no per-law decomposition** |
+
+> **The methodological lesson is worth more than any score.** A physics benchmark must decide whether physics is *deterministic*. Physics-IQ assumes one correct future, so it marks a model down for producing a **different but equally valid** rebound. That is the same error as judging a generative model by FID alone: **you cannot evaluate a stochastic process against a single reference.** Expect to report a distribution or a law-by-law breakdown, not one scalar.
+
+**The strongest test you'll have costs nothing extra — MIRA's trick.** The Rocket Science dataset ships the underlying **physics state** (ball and car positions, velocities) alongside the frames and actions. MIRA deliberately **does not train on it** — the model "only ever sees pixels and actions" — and holds the state back **purely for evaluation**. So you can ask *"is the ball where real physics says it should be?"* rather than *"does this look plausible?"*
+
+That is a **ground-truth physics probe on data you already have in Phase 11**, and it is far stronger than any prompt-based benchmark. The general technique is worth stealing: **withhold a privileged signal from training so it becomes a clean evaluation instrument.**
+
+**Deliverable:** a per-rollout-step physics-error curve for your Phase 11 model using the withheld state, alongside the drift curve. Two curves, two axes, same rollout.
+
+### Research project (optional): does physics supervision actually help?
+
+MIRA's choice to withhold physics state is a **design decision, not a necessity** — and the data to test it ships with the model. That makes a clean, genuinely open question:
+
+> **Does using the withheld physics state as auxiliary supervision improve long-rollout physical consistency — and at what cost to appearance?**
+
+**The experiment** (one variable):
+
+| Variant | Training signal |
+|---|---|
+| **A — baseline** | pixels + actions (MIRA as published) |
+| **B — physics-supervised** | pixels + actions **+ an auxiliary head predicting ball/car position and velocity**, with a loss weight to sweep |
+
+**Measure:** physics error vs rollout step (using held-out state), the drift curve, and image quality (FID / LPIPS). **Hypothesis:** auxiliary physics supervision shapes the latent to encode dynamics rather than appearance, improving long-horizon physical consistency at some cost to visual detail — and the loss weight traces that trade-off.
+
+**Do a cheap version first.** Build a toy 2D physics environment you fully control (`pymunk` or hand-rolled — bouncing balls, gravity, collisions), where state is exact and free. Train a small world model with and without the auxiliary head. If the effect is real, it will show up there for tens of dollars, and only then is it worth Phase 11 money.
+
+⚠️ **Prior art — read before claiming novelty.** Physics-aware training is active, and the four below are worth knowing because they occupy *different* positions on one spectrum: **how deeply is physics wired in?**
+
+| Paper | Where physics enters | What it showed |
+|---|---|---|
+| **TeleBoost** | **Auxiliary branch** — predicts inter-frame motion, supervised by optical flow extracted from the training data | Shallowest form: physics as a side task. Free supervision, since flow is computed not labelled |
+| **PhysisForcing** | **Where supervision is applied** — concentrates it on *physics-informative regions* rather than spreading it uniformly, jointly at pixel and semantic level | You can improve physics by reweighting *where* the loss looks, without changing the objective |
+| **LaMo** | **A learned prior added as guidance** — self-supervised latent motion priors from unlabelled video, bolted onto an existing generator | Improves physical consistency without substantially modifying the base model. ⚠️ *I have only a thin read on this one — no concrete numbers verified* |
+| **LaWM** | **Inside the transition rule itself** — deepest | See below |
+
+**LaWM is the one to read properly**, because it is the cleanest instance of a physics-informed-DL idea transferred to a world model. Instead of scoring a finished rollout, it makes a **learned discrete Lagrangian** the transition rule: encode observations to latent coordinates, learn a discrete Lagrangian over pairs of consecutive latent states, and let the **discrete Euler–Lagrange equation** — the stationarity condition of the action — *define* the next state, solved by a small differentiable solver (~4 iterations). In their words, the action functional's *"stationarity condition provides the equation that will determine each next latent state."* Physics generates the prediction rather than grading it.
+
+What it showed: on 12 canonical dynamics (uniform motion, acceleration, parabolic, rotation, damped oscillation, deformation) it was best or second-best on nearly all metrics, with the largest gains on **Physical Invariance Score** — e.g. acceleration PIS **0.657 → 0.896** — plus reduced energy drift and stability past **200 frames**. On embodied robot video: LPIPS 0.1259 → 0.1138, PSNR 21.85 → 22.42, depth AbsRel 0.36 → 0.328. Its ablation is the load-bearing result: **the variational transition beat gradient-based trajectory refinement on 14 of 17 PIS metrics** — i.e. building the principle *in* beats correcting afterwards.
+
+Its limitations are equally instructive: the formulation assumes **unforced, non-dissipative** dynamics, so damped oscillation and deformation are *weaker* than baselines; contact and actuation remain hard; and the DEL solve is approximate. It also does not claim its latents are true physical states — only "dynamics-aware coordinates."
+
+**So *"auxiliary physics objectives"* is not a novel technique** — TeleBoost and LaMo already occupy that ground. **What is open is the specific ablation:** a controlled test of a published system's stated design choice, on its own released data, with ground-truth state available. That is a legitimate contribution shape and an honest one to claim.
+
+### LaWM's code — and why it's set up for *understanding*, not reproducing
+
+[`chloeqxq/LaWM`](https://github.com/chloeqxq/LaWM) (Xiao & Ghaffari) is the official method-core repo.
+
+> ⚠️ **Acronym trap — there are at least four unrelated "LaWM"s.** `baheytharwat/lawm` is *Latent Action Pretraining Through World Modeling* (relevant, but that's Phase 17); `rlinf/LaWAM` is *Latent World Action Models*; `LargeWorldModel/LWM` is a long-context text+video model. Get the right one.
+
+| | Status |
+|---|---|
+| Training code | ✅ `scripts/train_state.py` (state-space), `scripts/train_visual.py`, a RoboScape script |
+| Physics eval | ✅ `scripts/eval_physics.py` — **stationary-action residual, energy drift, state-space invariance** |
+| **Toy data generator** | ✅ **parabolic dynamics included** — no external data needed to get a full loop running |
+| Pretrained weights | ❌ none |
+| Datasets | ❌ not vendored — *"external datasets... are not vendored"*; you supply video + depth/action tensors |
+| Configs | ⚠️ CLI args only |
+| License | ❓ **not stated — check before building on it** |
+
+**The distinction that matters: it is incomplete for reproducing their tables, but complete for learning the mechanism.** Toy generator → state-space training → physics metrics is a full cycle at laptop-to-single-GPU scale, with nothing to source.
+
+**Reading order:**
+1. **`train_state.py`** — the mechanism with vision stripped out. Find where the discrete Lagrangian is parameterised and where the DEL residual is computed. This is the clearest possible view.
+2. **The DEL solver** — how many iterations, and what happens when it doesn't converge. The approximation lives here.
+3. **`eval_physics.py`** — **steal these three metrics regardless** of whether you adopt the transition rule. They are quantitative and law-based, which beats the judged prompt benchmarks above.
+4. **`train_visual.py`** — only after the above; it adds the encoder and the "latents as dynamics-aware coordinates" assumption they're careful not to over-claim.
+
+**The principle in one comparison:**
+```
+ordinary world model:   q_{k+1} = f(q_k, action)           ← a network predicts the next state
+LaWM:                   q_{k+1} = whatever satisfies DEL    ← a network defines the Lagrangian;
+                                                              the next state is derived from it
+```
+`L = kinetic − potential`; the discrete Euler–Lagrange condition `D₂L_d(q_{k−1},q_k) + D₁L_d(q_k,q_{k+1}) = 0` is implicit in `q_{k+1}`. **Energy conservation stops being a penalty you tune and becomes a property of the integrator** — which is why the long-horizon stability comes for free.
+
+### The harder swing: dissipation and contact
+
+If you want something more original than the auxiliary-supervision ablation, LaWM hands you the opening in its own limitations: the formulation assumes **unforced, non-dissipative** dynamics, and they report **damped oscillation and deformation actually underperforming baselines**. Contact and actuation stay hard.
+
+**A game world model is nothing but contact and dissipation** — collisions, friction, damping. So *"extend a variational latent transition to dissipative and contact dynamics"* is a real open problem with a **released baseline**, a **free toy testbed**, and **metrics already implemented**. That is an unusually good setup for a first research contribution. It is also genuinely hard — the classical machinery here (forced/dissipative variational integrators, contact-implicit methods) is a literature of its own, so read before committing.
+
+**Physics-informed DL concepts worth borrowing, ranked by transferability:**
+
+| Concept | How it transfers | Feasibility |
+|---|---|---|
+| **Auxiliary state prediction** | Predict physical quantities as a side task | ✅ easy — the project above |
+| **Conservation-law regularisers** | Penalise energy/momentum violation on decoded trajectories | ✅ tractable in a toy env with known laws |
+| **Least action / Lagrangian structure** (LaWM) | Build the variational principle into the latent transition | ⚠️ elegant, harder — read LaWM first |
+| **Equivariance / symmetry** | Translating the scene should translate the prediction; conservation laws follow from symmetries (Noether) | ⚠️ architectural surgery |
+| **PINN-style PDE residuals** | Add the governing equation to the loss | ❌ needs a known PDE — fine for fluids, not for "a car hits a ball" |
+
+## Part J — Real-time video products
+
+### Phase 19 — Decart-class real-time streaming *(the last chapter, and it depends on almost everything before it)*
+
+Decart, Runway's live modes, Odyssey — the "restyle a live camera feed at 20+ fps" product category. This chapter is last because it **consumes** most of the plan: causal attention (Phase 9), few-step distillation (Phase 12), KV-cache kernels (Phase 14), and streaming serving (Phase 15b). It is where those stop being separate skills.
+
+**The core insight, restated from the handbook's Part VI:** a bidirectional video model **cannot stream at any speed** — the dependency structure is wrong, not the throughput. Frame *t* attends to frame *t+300*, which does not exist yet. **Real-time requires a causal architecture, not a faster one.** So every system in this category has performed the same conversion: *bidirectional → causal → few-step → fused kernels*.
+
+**And why video-to-video ships before free generation:** V2V conditions each frame on a **fresh camera frame from outside the feedback loop**, so drift can never accumulate past one step's worth. Structure is re-supplied every 40 ms and is never the model's to remember; only style intensity can drift, and that is cosmetic. T2V has no such anchor. (Phase 9's drift material, applied.)
+
+#### Do this one: **Live2Diff**
+
+[`open-mmlab/Live2Diff`](https://github.com/open-mmlab/Live2Diff) — *Live Stream Translation via Uni-directional Attention in Video Diffusion Models*. The **first** video diffusion model built with uni-directional temporal attention, and the cheapest possible hands-on with the whole pattern.
+
+| Why it fits | |
+|---|---|
+| **Uni-directional temporal attention** | Correlates the current frame with predecessors + a few warm-up frames, **no future frames**. This *is* the bidirectional→causal conversion, in a small readable codebase |
+| **Multi-timestep KV cache** | Because later frames can't influence earlier ones, K/V from generated frames are reusable — no recomputation. Phase 14's target, already implemented |
+| **16 FPS at 512×512 on an RTX 4090** | **Consumer hardware.** No H100, no B200 |
+| **TensorRT support** | Connects straight to Phase 14/15 |
+| Ships | Code, **checkpoints**, a Colab, depth-prior conditioning, DreamBooth/LoRA compatibility |
+
+**Deliverable:** run it on a webcam feed; profile where the 60 ms goes (encode / denoise / decode / cache); ablate the KV cache off and watch the frame rate collapse; then measure the **frame-deadline hit rate** from Phase 15b. That single exercise ties Phases 9, 14 and 15 together on hardware you may already own.
+
+#### On the two virtual try-on papers
+
+Both are **video try-on** — a *task*, not a technique. Judge them by what they'd teach you that this plan doesn't already:
+
+| Paper | Verdict | Reasoning |
+|---|---|---|
+| **SwiftTry** (code, weights, training + inference) | ⏭ **Optional** | A well-packaged **application** of video editing with temporal consistency. Worth doing only if garment try-on is a product direction you care about. The underlying techniques are already covered |
+| **MagicTryOn** (code, weights, inference; 14B/16B class) | ❌ **Skip** | Higher garment fidelity, **not real-time**. It optimises the axis this plan deliberately trades away, and a 14B/16B system is an expensive detour that teaches no new architecture |
+
+> **The distinction worth internalising: Live2Diff is a *technique* paper, the try-on papers are *task* papers.** Techniques transfer to everything you build afterwards; tasks transfer only to that task. With limited time, do the technique. If you later want a try-on product, SwiftTry becomes the right starting point — and you will be better at it for having done Live2Diff first.
+
+**If you want the full product path** (this is the handbook's Part VI build plan): take an open bidirectional backbone (Wan 2.1-1.3B), make it causal (Phase 9), distil to few-step (Phase 12), fuse and cache (Phase 14), serve with session affinity (Phase 15b). Live2Diff, CausVid and Self-Forcing are all prior art for exactly that pipeline — **you are not inventing it**, which cuts the risk enormously.
+
+---
+
+
+
 
 
 ---
