@@ -475,6 +475,23 @@ Two routes exist; you will take the cheap one:
 
 **What you build:** take your **Phase 6 DiT** (or a small pretrained image model from Phase 7), insert temporal attention between the spatial blocks, **zero-init the temporal layers** so the model starts as its image self (the Phase 7 pattern again), and finetune on short clips. Something small and repetitive — a bouncing-ball sim, a toy maze walkthrough, or a low-res video subset.
 
+### Inflation works for UNets *and* DiTs — but not identically
+
+The mechanism differs enough to matter, and the DiT case is the one you'll actually implement:
+
+| | **UNet inflation** (AnimateDiff, Video LDM, SVD) | **DiT inflation** (Latte, Open-Sora ST-DiT) |
+|---|---|---|
+| Spatial path | Existing conv + attention blocks, run **per frame** — reshape `(B,T,C,H,W) → (B·T,C,H,W)` | Existing spatial attention over patch tokens, run **per frame** |
+| Temporal path | **Graft** new temporal-attention modules into a conv network — a foreign component in a conv stack | **Insert** temporal-attention blocks between spatial blocks — same operator, same block structure. **Structurally cleaner** |
+| Positional encoding | Conv handles space; temporal attention just needs a position signal along `T` | ⚠️ **You must extend positional encoding to time** — 3D RoPE, or add temporal position embeddings. **This is the DiT-specific gotcha** |
+| Zero-init trick | ✅ works | ✅ works |
+
+**So: yes, do it for the DiT — that is the natural version.** A transformer accepting new attention blocks is a much smaller violence than bolting attention into a conv net. The one extra thing you must handle is **positions along the time axis**, which has no UNet analogue because convolution supplies spatial structure for free.
+
+> **⚠️ But know the ceiling of what you're building.** Inflation gives you **factorized** attention — spatial within a frame, then temporal across frames. That is Phase 6's "Video DiT, cheap" row. The modern frontier (Wan, HunyuanVideo, MIRA) uses **full 3D attention** over all space-time tokens at once, which is *not* inflation: it changes the attention pattern itself, so pretrained spatial weights are being applied to a different token set, and it needs far more video training. **Factorized is what you can afford and what teaches the concept; full 3D is what ships at scale.** Knowing you built the cheap variant on purpose is the point.
+
+**The reference for the DiT case:** [**Latte**](https://github.com/Vchitect/Latte) (arXiv 2401.03048) is the canonical study here — it enumerates **four** ways to decompose space and time in a video DiT (interleaved spatial/temporal blocks; factorized spatial-then-temporal attention; spatial attention with 3D convs for time; and variants between). Read it to see that "insert temporal attention" is not one design but a small design space, and to pick which variant you implement rather than defaulting.
+
 **Reference implementation to read *while* you build:** [`VinAIResearch/swift-try`](https://github.com/VinAIResearch/swift-try) (SwiftTry, arXiv 2412.10178). It is a video try-on paper, but three ingredients are general and it spells out the recipe you're implementing:
 
 1. **Two-stage inflation** — stage 1 pretrains the U-Nets on *image* data; stage 2 inflates with temporal layers and finetunes on *video*. Exactly your build.
@@ -1040,7 +1057,8 @@ That last number decides whether the thing is a product or a demo. Recall from P
 | **6** DiT | ⭐ **DiT — Scalable Diffusion Models with Transformers** (Peebles & Xie) — patch size as the compute knob, adaLN-Zero, the scaling curve | MMDiT (SD3); U-ViT (long skips); RoPE (Su et al.); FlashAttention (Dao et al.) |
 | **7** Ecosystem & conditioning | ⭐ **Classifier-Free Guidance** (Ho & Salimans) — load-bearing, not a knob. ⭐ **ControlNet** (Zhang et al.) — zero-init clone of a frozen encoder | Classifier guidance (Dhariwal & Nichol); IP-Adapter; T2I-Adapter; LoRA (Hu et al.) |
 | **8** World models | ⭐ ✅ **DIAMOND** (Alonso et al. 2024) — 13M params, 1.46 HNS, "visual details matter". ⭐ ✅ **IRIS** (Micheli, Alonso, Fleuret) — the discrete-token counterargument, same lab. ⭐ **DreamerV3** (Hafner et al.) — the RSSM lineage | ✅ GameNGen; ✅ JEPA-WMs (Terver et al., FAIR); V-JEPA 2; STORM; TWM |
-| **9** Video + causal rollout | ⭐ **AnimateDiff** (Guo et al.) — inflation, the recipe you build in 9a. ⭐ ✅ **Live2Diff** (Xing et al. 2024) — first uni-directional video diffusion, what you read in 9b. ⭐ ✅ **Diffusion Forcing** (Chen et al. 2024). ⭐ ✅ **Self-Forcing** (2025) | Video Diffusion Models (Ho et al.); ✅ SwiftTry (two-stage inflation + reference-image branch); CausVid; ✅ Causal Forcing (thu-ml, ICML 2026) |
+| **9a** Video models | ⭐ ✅ **Latte** (arXiv 2401.03048) — the **DiT** inflation design space, four space/time decompositions. ⭐ **AnimateDiff** (Guo et al.) — the **UNet** inflation recipe | **Video LDM / "Align your Latents"** (Blattmann et al.) — the canonical inflation-of-latent-diffusion paper; **Stable Video Diffusion** (Blattmann et al.) — inflation done practically, with a real data-curation section; **Video Diffusion Models** (Ho et al. 2022) — the original factorized space-time attention; ✅ SwiftTry (two-stage inflation + reference-image branch); **Lumiere** (Google) — closed, but read the *argument*: generate all frames at multiple space-time scales instead of keyframes-then-interpolate. Worth knowing the temporal cascade is a choice with costs; **Wan 2.1/2.2** — the full-3D-attention alternative, Apache 2.0, and the backbone most of Parts G–J build on |
+| **9b–9c** Causal rollout | ⭐ ✅ **Live2Diff** (Xing et al. 2024) — first uni-directional video diffusion, read in 9b. ⭐ ✅ **Diffusion Forcing** (Chen et al. 2024). ⭐ ✅ **Self-Forcing** (2025) — the *rollout* half here, the *objective* half in Phase 12 | CausVid; ✅ Causal Forcing (thu-ml, ICML 2026); StreamDiffusion |
 | **10** Distributed | ⭐ **ZeRO** (Rajbhandari et al.) — the sharding idea behind both DeepSpeed and FSDP. ⭐ **PyTorch FSDP** (Zhao et al.) | Megatron-LM (tensor parallel); GPipe (pipeline parallel); Goyal et al. 2017 (linear scaling rule + warmup) |
 | **11** MIRA | ⭐ ✅ **MIRA** (General Intuition + Kyutai + Epic) — read alongside the RAE paper from Phase 5, since the codec is the credited result | ✅ minWM (the pluggable framework); Wan 2.1/2.2 technical reports |
 | **12** Distillation | ⭐ **DMD2** (Yin et al.) — the workhorse. ⭐ **Consistency Models** (Song et al.). ⭐ **LCM-LoRA** (Luo et al.) — distillation as a swappable adapter | Progressive Distillation (Salimans & Ho); ADD/SDXL-Turbo & LADD (Sauer et al.); sCM; MeanFlow; Shortcut Models (Frans et al.); guidance distillation (Meng et al.); ✅ "Few-Step Distillation for T2I: A Practical Guide" |
