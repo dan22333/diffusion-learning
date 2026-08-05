@@ -425,7 +425,20 @@ It also closes a loop opened in Phase 5, which cites IRIS as the "discrete laten
 | **Generative / pixel-rendering** | the next **frame** | Sora, Genie, MIRA, Diamond, Matrix-Game | ✅ covered end-to-end |
 | **Non-generative / latent prediction** | the next **embedding** — never renders | **V-JEPA 2** (Meta), **DreamerV3** | ⚠️ read only |
 
-V-JEPA 2 learns physics from ~1M hours of video and transfers to robot control with ~62 h of robot data; DreamerV3 trains a policy by imagining rollouts in a latent world model. **Both open.** Don't reproduce either — but you should be able to say why the JEPA camp argues rendering pixels is wasted capacity, and why the generative camp pays that cost to get a *usable simulator* out of it. **Diamond is the bridge:** a generative world model serving Dreamer's purpose.
+V-JEPA 2 learns physics from ~1M hours of video and transfers to robot control with ~62 h of robot data; DreamerV3 trains a policy by imagining rollouts in a latent world model. You should be able to say why the JEPA camp argues rendering pixels is wasted capacity, and why the generative camp pays that cost to get a *usable simulator* out of it. **Diamond is the bridge:** a generative world model serving Dreamer's purpose.
+
+**Do a small hands-on, because the best entry point ships weights *and* data:** [`facebookresearch/jepa-wms`](https://github.com/facebookresearch/jepa-wms) — *"What Drives Success in Physical Planning with Joint-Embedding Predictive World Models?"* (Terver, Yang, Ponce, Bardes, **LeCun**; FAIR).
+
+- **What it does:** uses a JEPA predictor as a world model for **planning** — given a goal, search over action sequences, roll the predictor forward **in embedding space**, and pick the sequence whose predicted embedding lands nearest the goal. MPC without ever rendering a frame.
+- **The line that makes the paradigm concrete**, from its README: *"Decoder heads enable visualization and rollout decoding. **They are not required for training world models or running planning evaluations.**"* **Pixels are optional.** In Diamond, rendered frames *are* what the policy consumes; here they are a debugging convenience.
+- **The connection back to Phase 5 — this is the part worth noticing.** Its encoders are **frozen DINOv2 ViT-S/14, DINOv3 ViT-L/16, V-JEPA-2 ViT-G/16**. That is *exactly* the representation-autoencoder idea, pointed at a different objective:
+  - **RAE / MIRA:** freeze DINO, **diffuse** in its space
+  - **JEPA-WM:** freeze DINO, **plan** in its space
+  Two camps that disagree about almost everything converged on *"semantic latents are easier to predict than reconstruction latents."* That agreement is a strong signal.
+- **Practicalities:** pretrained weights + datasets on HF (PointMaze, Wall, Push-T, Metaworld 42 tasks, RoboCasa, Franka/DROID), plus a single-GPU `--debug` mode. It is also an **analysis** paper — it tells you *which design choices matter* (encoder, predictor depth) rather than presenting one system, which makes it unusually efficient reading.
+- ⚠️ **CC-BY-NC 4.0 — non-commercial.** Also SLURM-oriented (FAIR infra), so expect friction on a plain VM.
+
+**Suggested scope:** run planning on **Push-T or PointMaze** from released weights. Cheap, and it makes "predicting embeddings instead of pixels" concrete in a way no amount of reading does.
 
 - **Read GameNGen's paper here**, alongside Diamond's, as a same-lineage contrast. It costs an evening and it's where the drift problem is first named.
 - *Optional stretch:* re-run EDM on **class-conditional ImageNet-64**, or apply Phase 5's latent setup at higher resolution.
@@ -646,7 +659,25 @@ Build **one custom inference container** (FastAPI + your model, or Triton Infere
 
 > **⚠️ Why an interactive world model breaks the serverless assumptions — and this is the interesting part.** Cloud Run and Vertex Endpoints are built for **stateless** prediction: request in, response out, any replica will do. An interactive world model is the opposite:
 > - It holds **per-session state** (the KV cache, the rollout history) — so request N+1 *must* reach the same replica as request N.
-> - It needs **one GPU per stream** (diffusion is already compute-bound at batch 1, so batching across users buys almost nothing — see the handbook's Part V).
+> - It needs **session-affine routing** — request N+1 must reach the same replica, whether that replica serves 1 session or 10.
+
+> **⚠️ How many sessions fit on one GPU — and why "one GPU per stream" is not a law.** That figure comes from *large* models (MultiGen reports ~20 fps per **A100 per player**; MIRA needs a **B200** for 4 views). The real constraint is **time, not memory** — and this trips people up, so be precise:
+>
+> **Compute-bound does not mean "memory is full."** It means the GPU's *math units* are saturated. A diffusion model pushes **thousands of patches** through every layer in one forward pass, so the weight read is already amortised over thousands of items — those patches *act* like a batch. (Contrast an LLM decoding one token: it reads every weight to produce one item, which is why it is memory-bandwidth-bound and why batching gives LLM serving 10–100×.)
+>
+> The consequence: batching more users does not discover idle math units, because they were already busy. Memory is usually fine — a small distilled model could *fit* 20 sessions. You just cannot *compute* them inside the frame deadline. The arithmetic:
+>
+> ```
+> frame budget = 40 ms (25 fps)      sessions per GPU ≈ 40 ms / single-stream latency
+> ```
+>
+> | Single-stream latency | Sessions per GPU |
+> |---|---|
+> | 30 ms — undistilled, large | **1** (no headroom at all) |
+> | 8 ms — distilled to 3–4 steps | ~4 |
+> | 3 ms — distilled + fused kernels, small model | ~10 |
+>
+> **So sessions-per-GPU is an *output* of Phases 12 and 14, not an infrastructure decision.** The same work that gets you under the frame deadline is what lets you amortise a GPU across users — distillation and kernels change your serving *economics*, not just your latency. Diamond at Atari resolution would batch many sessions trivially; MIRA at 576p would not.
 > - It has a **frame deadline** (~40 ms), not a throughput target.
 >
 > That is not a web-service shape, it is a **game-server** shape — long-lived, sticky, session-per-GPU. Which is exactly the workload Kubernetes handles well and serverless does not. Note the symmetry with Phase 10's RL exception: **K8s earns its keep on heterogeneous and stateful workloads, never on bounded training jobs.**
@@ -689,7 +720,81 @@ These are **three different problems**, not three solutions to one — the most 
 - **Matrix-Game 3.0 sits between them:** memory is **learned and retrieved** (inside attention) rather than authored (MultiGen) or absent (MIRA). Strongest *spatial* claim; MIRA has the strongest *stability* claim; MultiGen the strongest *persistence/editability* claim. **Different axes — none implies the others.**
 - **LingBot-World** (Robbyant/Ant Group) — the largest fully open one: **Wan2.2-based DiT trained with FSDP**, MoBA attention, 720p/60fps, hour-long rollouts, multi-user, plus Pilot/Director agents. **Code *and* weights released.** Verdict: **read + run, don't reproduce.** It's the best way to *feel* a state-of-the-art world model (MIRA ships no weights), and it's a concrete reference for the FSDP scale-out of Phase 10.
 - **Genie / Genie 2 / Genie 3** (DeepMind) — the other frontier line, and the only one that learns **actions themselves** rather than assuming them. Genie 3 does navigable 3D worlds at 24 fps in real time, general-purpose. **All closed** — reference points only. The mechanism is reproducible at small scale though, which is Phase 17.
-- **Natural capstone:** graft MultiGen's Memory/Observation/Dynamics decomposition onto a world model you already control. **Diamond is by far the cheapest host** — you already have the rollout loop *and* an RL agent. `minWM` is explicitly built as a pluggable framework for this kind of surgery.
+### The capstone: run one, then build one
+
+**Step 1 — run LingBot-World first. Days, ~$20.** It is the only shared-world multiplayer model that **ships weights**, so you can experience the problem before committing a month to it. Treat this as reconnaissance: play it, try to break it, run the loop-closure and physics probes above on it. If it doesn't provoke questions you want to answer, don't build.
+
+**Step 2 — reimplement MultiGen on top of Diamond.** This is the capstone I'd push you toward over reproducing MIRA's 4-player model, because it is closer to original work and *far* cheaper.
+
+⚠️ **MultiGen has no released code** — its project page has an abstract, method figures and BibTeX, no repository. Author list explains it: Stanford + **Google** (Po, Zhang, Hertz, Wetzstein, Wadhwa, Ruiz). So this is a build-from-paper job. Three reasons it is nonetheless tractable:
+
+1. **The memory is symbolic, not neural** — 2D vertices and line segments for walls, plus `(x, y, yaw)` per player. There is no model to train for it.
+2. **The conditioning is simple** — ray-trace the 2D map from the current pose, get a 1-D depth vector across the field of view, convert to disparity, concatenate with context frames. Dynamics is a *small* transformer predicting a pose delta.
+3. **🔑 You do not need a dataset.** Write a toy DOOM-like maze engine — a few hundred lines of Python — and it emits **perfect** training tuples: `(frame, pose, action, ray-depth, map)`. Unlimited, exactly labelled, no scraping, no curation, no licence. **This removes the single largest cost in every other project in this plan.**
+
+And you already have the host: **Diamond gives you the diffusion rollout loop *and* an RL agent.** You are adding the Memory / Observation / Dynamics decomposition around a model you understand.
+
+**Cost reality:** MultiGen reports ~20 FPS at **one A100 per player** — but see Phase 15b: that is a property of *their* model size, and sessions-per-GPU is an output of your distillation and kernel work. Four players ≈ 4 A100s ≈ $15/hr on-demand, ~$5/hr Spot. Fine for a demo session, not for something left running.
+
+**Why this capstone and not another reproduction:** it is the one thing this plan otherwise cannot give you — **a result of your own.** Reproductions prove you can follow; this proves you can build. `minWM` is explicitly designed as a pluggable framework if you would rather do the surgery on a DiT than on Diamond.
+
+**And it is the point where GKE finally earns its keep** (Phase 15b) — you would have genuinely concurrent, stateful, session-affine workloads to orchestrate.
+
+### Physics: the third axis, and the one where world models are most obviously broken
+
+Stability and memory are not enough. A model can never diverge, remember the room perfectly, and still have **nonsense physics** — the ball falls wrong, the collision rebounds wrong, objects pass through each other. **Visual plausibility and physical correctness are different properties**, and the gap between them is the current research frontier.
+
+| Axis | Question | Test |
+|---|---|---|
+| **Temporal stability** | Does it degrade as I roll out? | drift curve (Phase 9) |
+| **Spatial memory** | Is the room still the *same* room? | loop closure (above) |
+| **Physical plausibility** | Does the ball fall correctly? Does the collision rebound right? | **this section** |
+
+**The benchmarks — and their flaws, which are the real lesson:**
+
+| Benchmark | Coverage | Known weakness |
+|---|---|---|
+| **PhyWorldBench** (NVIDIA **Cosmos Lab**) | fundamental motion → rigid-body interaction → human/animal motion | the Cosmos-adjacent one; broad difficulty levels |
+| **Physics-IQ** | 66 image-to-video scenarios; pixel metrics (spatial + spatiotemporal IoU, MSE) | ⚠️ **presupposes a single ground-truth trajectory** — so it penalises legitimate camera motion *and* physically valid stochastic outcomes like rebound angles and splash patterns |
+| **PhyGenBench** | 160 prompts across **27 physical laws** | three-stage cascaded binary scoring — classification errors compound across stages |
+| **VideoPhy-2** | ~590–688 prompts, 12 human annotators | only two coarse axes, **no per-law decomposition** |
+
+> **The methodological lesson is worth more than any score.** A physics benchmark must decide whether physics is *deterministic*. Physics-IQ assumes one correct future, so it marks a model down for producing a **different but equally valid** rebound. That is the same error as judging a generative model by FID alone: **you cannot evaluate a stochastic process against a single reference.** Expect to report a distribution or a law-by-law breakdown, not one scalar.
+
+**The strongest test you'll have costs nothing extra — MIRA's trick.** The Rocket Science dataset ships the underlying **physics state** (ball and car positions, velocities) alongside the frames and actions. MIRA deliberately **does not train on it** — the model "only ever sees pixels and actions" — and holds the state back **purely for evaluation**. So you can ask *"is the ball where real physics says it should be?"* rather than *"does this look plausible?"*
+
+That is a **ground-truth physics probe on data you already have in Phase 11**, and it is far stronger than any prompt-based benchmark. The general technique is worth stealing: **withhold a privileged signal from training so it becomes a clean evaluation instrument.**
+
+**Deliverable:** a per-rollout-step physics-error curve for your Phase 11 model using the withheld state, alongside the drift curve. Two curves, two axes, same rollout.
+
+### Research project (optional): does physics supervision actually help?
+
+MIRA's choice to withhold physics state is a **design decision, not a necessity** — and the data to test it ships with the model. That makes a clean, genuinely open question:
+
+> **Does using the withheld physics state as auxiliary supervision improve long-rollout physical consistency — and at what cost to appearance?**
+
+**The experiment** (one variable):
+
+| Variant | Training signal |
+|---|---|
+| **A — baseline** | pixels + actions (MIRA as published) |
+| **B — physics-supervised** | pixels + actions **+ an auxiliary head predicting ball/car position and velocity**, with a loss weight to sweep |
+
+**Measure:** physics error vs rollout step (using held-out state), the drift curve, and image quality (FID / LPIPS). **Hypothesis:** auxiliary physics supervision shapes the latent to encode dynamics rather than appearance, improving long-horizon physical consistency at some cost to visual detail — and the loss weight traces that trade-off.
+
+**Do a cheap version first.** Build a toy 2D physics environment you fully control (`pymunk` or hand-rolled — bouncing balls, gravity, collisions), where state is exact and free. Train a small world model with and without the auxiliary head. If the effect is real, it will show up there for tens of dollars, and only then is it worth Phase 11 money.
+
+⚠️ **Prior art — read before claiming novelty.** Physics-aware training is active: **LaWM** places a *least-action* (Lagrangian) principle inside the latent transition rather than using an auxiliary loss; **LaMo** learns self-supervised latent motion priors; **PhysisForcing** concentrates supervision on physics-informative regions; **TeleBoost** adds an auxiliary motion-prediction branch supervised by optical flow. So *"auxiliary physics objectives"* is not a novel technique. **What is open is the specific ablation** — a controlled test of a published system's stated design choice, on its own released data. That is a legitimate contribution shape, and an honest one to claim.
+
+**Physics-informed DL concepts worth borrowing, ranked by transferability:**
+
+| Concept | How it transfers | Feasibility |
+|---|---|---|
+| **Auxiliary state prediction** | Predict physical quantities as a side task | ✅ easy — the project above |
+| **Conservation-law regularisers** | Penalise energy/momentum violation on decoded trajectories | ✅ tractable in a toy env with known laws |
+| **Least action / Lagrangian structure** (LaWM) | Build the variational principle into the latent transition | ⚠️ elegant, harder — read LaWM first |
+| **Equivariance / symmetry** | Translating the scene should translate the prediction; conservation laws follow from symmetries (Noether) | ⚠️ architectural surgery |
+| **PINN-style PDE residuals** | Add the governing equation to the loss | ❌ needs a known PDE — fine for fluids, not for "a car hits a ball" |
 
 **How to evaluate any of this — the two axes need two different tests:**
 - **Drift** → the **drift curve** from Phase 9 (quality vs rollout position).
