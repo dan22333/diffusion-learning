@@ -510,6 +510,18 @@ Your inflated model has **bidirectional** temporal attention, so it cannot strea
 
 > **Vocabulary, because these get conflated:** "causal / autoregressive diffusion" is the **category**. Diffusion forcing, self-forcing and causal forcing are **different members**, not synonyms. Diffusion forcing changes the **noising scheme**; self-forcing changes **what the model conditions on during training**. They're orthogonal — modern systems do **both**.
 
+> ### ⚠️ Self-Forcing appears here *and* in Phase 12 — on purpose. Here is the split.
+> Self-Forcing is **two things bolted together**, and they are separable. You build one half here and the other in Phase 12:
+>
+> | Half | Where | What it is | What it buys |
+> |---|---|---|---|
+> | **The rollout scheme** | **9c (here)** | Roll out autoregressively *during training*, with a KV cache, so the model conditions on its own generations. **Loss stays MSE** | **Less drift.** Robustness to your own errors. Still many sampling steps — not yet fast |
+> | **The distillation objective** | **Phase 12** | Replace per-step MSE with a **holistic distribution-matching (DMD-style) loss** over the sequence, and distil into a **few-step student** | **Real-time.** 3–4 steps instead of 30 |
+>
+> **Diamond is the proof they're separable:** it already does the rollout half with an MSE loss (see the code note below) and has neither the distribution-matching loss nor a few-step student. So *"self-rollout with MSE"* is a real, working, useful configuration — and it is what you build in 9c.
+>
+> **Do it in this order deliberately.** Build the rollout half first and measure the drift curve; you will see robustness improve while speed does not. Then Phase 12 changes the loss and the step count. Two variables, two phases, two measurements. Fusing them means you cannot tell which one helped.
+
 > **Diffusion forcing is not "just add noise" — the *independence* is the whole idea.** Ordinary video diffusion draws **one** σ and applies it to the whole clip. Diffusion forcing draws a **separate, independent σ per frame**. That sounds minor; it changes what the network learns:
 > - Standard training covers a 1-D family: *(one noise level)*. Diffusion forcing covers the full **2-D grid of (frame position × noise level)** — including the asymmetric corner that matters: **clean-ish past, very noisy future.** That corner *is* causal generation, and standard training never visits it.
 > - So at inference you can **choose the noise schedule across time**, not just across steps. Fully denoise the past for maximum sharpness, or hold the past at low-but-nonzero noise to stay robust to your own errors — a dial you simply don't have otherwise.
@@ -659,14 +671,25 @@ Part H contains three different tools and they are **not interchangeable**. Diag
 > Corollary worth stating plainly: **distillation is the big diffusion inference win; quantization is the smaller, riskier secondary squeeze.** Diffusion quantization is harder than LLM quantization (error compounds across denoising steps, activation ranges swing across timesteps, artifacts are *visible*). Hence 12 → 14 → 15, in that order.
 
 ### Phase 12 — Distillation
-The multi-step sampler is the bottleneck. Distillation only makes sense once Phases 8–11 have produced a real model, and for interactive models it's **fused with Phase 9's causal training** (Self-Forcing *is* a rollout scheme and a distillation objective at once).
+The multi-step sampler is the bottleneck. Distillation only makes sense once Phases 8–11 have produced a real model.
+
+> **⚠️ This phase finishes what Phase 9c started — it does not repeat it.** Self-Forcing is a rollout scheme *and* a distillation objective, and the two halves are separable:
+>
+> | | **Phase 9c built** | **Phase 12 adds** |
+> |---|---|---|
+> | Training conditions on | its own generations (self-rollout + KV cache) ✅ | *unchanged* |
+> | Loss | per-step **MSE** | → **holistic distribution-matching (DMD-style)** over the sequence |
+> | Sampling steps | still ~30 | → **3–4** (a few-step student) |
+> | Result | **less drift** | **real-time** |
+>
+> So when the table below says "implement Self-Forcing / Causal Forcing," it means **the objective and the student** — you already have the rollout loop. Keeping them separate is what lets you attribute the improvement: 9c's drift curve isolates robustness, this phase's NFE-vs-quality curve isolates speed.
 
 **There are ~7 families. You do not need all 7.** Triage:
 
 | Family | Verdict |
 |---|---|
 | **Distribution matching — DMD → DMD2** | **Implement.** The workhorse. DMD2 drops the regression loss and adds a GAN term so it learns from real data. Every real-time interactive model uses a DMD-family objective |
-| **Self-Forcing / Causal Forcing** | **Implement.** The interactive-specific one; not optional for real-time world models (Phase 9) |
+| **Self-Forcing / Causal Forcing** — *the objective + the student half* | **Implement.** The interactive-specific one; not optional for real-time world models. The rollout loop already exists from **9c** — here you swap the loss and distil the student |
 | **Guidance distillation** (fold CFG into the model) | **Implement.** CFG doubles NFE, so this is a nearly free ~2×. Cheap, universal, and most curricula forget it |
 | **Consistency — CM → LCM / LCM-LoRA, iCT/ECT, sCM, TCD** | **Understand, don't implement.** Explain the consistency objective and why LCM-LoRA mattered (distillation as a swappable adapter). Current data point: **sCM** wins at very low NFE, **MeanFlow** gives sharper detail at higher NFE |
 | **Progressive distillation** | **Read only.** Historical; the idea takes ten minutes |
