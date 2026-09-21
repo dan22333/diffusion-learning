@@ -1,16 +1,18 @@
 """Samplers = the *reverse* process (noise -> image). This is where "number of
 steps" lives, and where the four formulations in the plan differ.
 
-Implemented now (Phase 0-), because both run on a plain DDPM-trained net:
+Run on a plain DDPM-trained net (objective=ddpm):
   - `DDPMSampler` — the foundational baseline, ~T stochastic steps.
   - `DDIMSampler` — same weights, deterministic, *skip* timesteps -> few steps.
 
-Stubs for Phase 0.5 (different training objective, so deferred on purpose):
-  - `EDMSampler`          — Karras σ-space + Heun; what DIAMOND uses.
-  - `FlowMatchingSampler` — velocity field along near-straight paths.
+Run on a flow-matching-trained net (objective=flow):
+  - `FlowMatchingSampler` — integrate the velocity ODE from noise to data.
+
+Run on an EDM-trained net (objective=edm):
+  - `EDMSampler`          — Karras σ-space + 2nd-order Heun; what DIAMOND uses.
 
 Every sampler exposes the same `.sample(model, shape, ...) -> images` call, so you
-can swap methods and step counts and plot them on shared axes (the Phase 0.5 race).
+can swap methods and step counts and plot them on shared axes (the Phase 3 race).
 """
 from .base import Sampler
 from .ddim import DDIMSampler

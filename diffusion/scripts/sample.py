@@ -18,10 +18,10 @@ import time
 import torch
 
 from diffusion.config import Config
-from diffusion.core import GaussianDiffusion
+from diffusion.core import SAMPLERS_FOR_OBJECTIVE, build_process
 from diffusion.core.samplers import SAMPLERS
 from diffusion.eval import save_image_grid
-from diffusion.models import UNet
+from diffusion.models import build_model
 from diffusion.utils import get_device
 
 
@@ -40,18 +40,19 @@ def main() -> None:
     cfg = Config.from_dict(ckpt["config"])
     device = get_device(cfg.train.device)
 
-    # Rebuild the net and load the EMA weights (what we sample from).
-    model = UNet(
-        in_channels=cfg.model.in_channels,
-        base_channels=cfg.model.base_channels,
-        channel_mults=tuple(cfg.model.channel_mults),
-        num_res_blocks=cfg.model.num_res_blocks,
-        time_embed_dim=cfg.model.time_embed_dim,
-    ).to(device)
+    # Rebuild the net (unet|dit, per the saved config) and load the EMA weights.
+    model = build_model(cfg.model).to(device)
     model.load_state_dict(ckpt["ema"])
     model.eval()
 
-    diffusion = GaussianDiffusion(cfg.diffusion).to(device)
+    # The sampler must match the objective the model was trained with.
+    obj = cfg.diffusion.objective
+    allowed = SAMPLERS_FOR_OBJECTIVE[obj]
+    if args.sampler not in allowed:
+        raise SystemExit(
+            f"checkpoint objective={obj!r} supports samplers {allowed}; got --sampler {args.sampler!r}")
+
+    diffusion = build_process(cfg.diffusion).to(device)
     sampler = SAMPLERS[args.sampler](diffusion)
     shape = (args.num_images, cfg.model.in_channels, cfg.model.image_size, cfg.model.image_size)
 

@@ -1,0 +1,41 @@
+# Phase 0- (flow-matching variant): same overfit-one-batch correctness test, but
+# with the FLOW-MATCHING objective instead of DDPM. The net now regresses the
+# velocity of the straight noise->data path (target = data - noise) and sampling
+# integrates that ODE. Only `diffusion.objective` changes vs overfit_ddpm.yaml.
+#
+#   python scripts/train.py --config configs/overfit_flow.yaml
+#   python scripts/sample.py --ckpt runs/overfit_flow/latest.pt --sampler flow_matching --steps 50
+#
+# Note the flow loss is NOT comparable in magnitude to the DDPM eps-MSE (its target
+# is data - noise, not unit-variance noise) — read the *collapse*, not the value.
+
+model:
+  name: unet            # backbone is orthogonal to the objective; try name: dit too
+  image_size: 16
+  in_channels: 3
+  base_channels: 32
+  channel_mults: [1, 2]
+  num_res_blocks: 1
+  time_embed_dim: 128
+
+diffusion:
+  objective: flow       # <-- straight-line velocity objective (rectified flow)
+  # schedule/timesteps are unused by flow matching (it defines its own path)
+
+data:
+  dataset: toy
+  num_images: 8
+
+train:
+  steps: 2000
+  batch_size: 8
+  lr: 0.0002
+  ema_decay: 0.999
+  warmup_steps: 100
+  grad_clip: 1.0
+  log_every: 200
+  ckpt_every: 1000
+  seed: 0
+  device: auto
+  out_dir: runs/overfit_flow
+  overfit_one_batch: true

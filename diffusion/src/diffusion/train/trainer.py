@@ -15,9 +15,9 @@ import subprocess
 import torch
 
 from ..config import Config
-from ..core import GaussianDiffusion
+from ..core import build_process
 from ..data import make_cifar_batch, make_toy_batch
-from ..models import EMA, UNet
+from ..models import EMA, build_model
 from ..utils import get_device, get_rng_state, seed_everything, set_rng_state
 
 
@@ -40,15 +40,11 @@ class Trainer:
         self.device = get_device(cfg.train.device)
 
         # --- model, diffusion process, EMA ---
+        # Backbone (unet|dit) and objective (ddpm|flow) are both chosen by config;
+        # the loop below is identical either way.
         m = cfg.model
-        self.model = UNet(
-            in_channels=m.in_channels,
-            base_channels=m.base_channels,
-            channel_mults=tuple(m.channel_mults),
-            num_res_blocks=m.num_res_blocks,
-            time_embed_dim=m.time_embed_dim,
-        ).to(self.device)
-        self.diffusion = GaussianDiffusion(cfg.diffusion).to(self.device)
+        self.model = build_model(m).to(self.device)
+        self.diffusion = build_process(cfg.diffusion).to(self.device)
         self.ema = EMA(self.model, decay=cfg.train.ema_decay)
 
         # --- optimizer (AdamW is the diffusion default) ---
@@ -133,13 +129,7 @@ class Trainer:
     @torch.no_grad()
     def sample(self, sampler, num_images: int = 8, num_steps=None) -> torch.Tensor:
         """Sample from the **EMA** weights (never the raw training weights)."""
-        eval_model = UNet(
-            in_channels=self.cfg.model.in_channels,
-            base_channels=self.cfg.model.base_channels,
-            channel_mults=tuple(self.cfg.model.channel_mults),
-            num_res_blocks=self.cfg.model.num_res_blocks,
-            time_embed_dim=self.cfg.model.time_embed_dim,
-        ).to(self.device)
+        eval_model = build_model(self.cfg.model).to(self.device)
         self.ema.copy_to(eval_model)
         eval_model.eval()
         shape = (num_images, self.cfg.model.in_channels, self.cfg.model.image_size,

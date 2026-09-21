@@ -1,0 +1,46 @@
+# Phase 0- (EDM variant): same overfit-one-batch correctness test, but with the
+# EDM (Karras) objective — a preconditioned denoiser trained in continuous
+# sigma-space and sampled with the 2nd-order Heun ODE integrator. Only
+# `diffusion.objective` changes vs overfit_ddpm.yaml.
+#
+#   python scripts/train.py --config configs/overfit_edm.yaml
+#   python scripts/sample.py --ckpt runs/overfit_edm/latest.pt --sampler edm --steps 32
+#
+# The EDM loss is weighted and NOT comparable in magnitude to the DDPM eps-MSE —
+# read the *collapse*, not the value.
+
+model:
+  name: unet            # backbone is orthogonal to the objective; try name: dit too
+  image_size: 16
+  in_channels: 3
+  base_channels: 32
+  channel_mults: [1, 2]
+  num_res_blocks: 1
+  time_embed_dim: 128
+
+diffusion:
+  objective: edm        # <-- Karras preconditioned denoiser in sigma-space
+  sigma_data: 0.5       # data std for images in [-1, 1]
+  sigma_min: 0.002
+  sigma_max: 80.0
+  rho: 7.0
+  P_mean: -1.2          # training sigma ~ log-normal(P_mean, P_std)
+  P_std: 1.2
+
+data:
+  dataset: toy
+  num_images: 8
+
+train:
+  steps: 2000
+  batch_size: 8
+  lr: 0.0002
+  ema_decay: 0.999
+  warmup_steps: 100
+  grad_clip: 1.0
+  log_every: 200
+  ckpt_every: 1000
+  seed: 0
+  device: auto
+  out_dir: runs/overfit_edm
+  overfit_one_batch: true

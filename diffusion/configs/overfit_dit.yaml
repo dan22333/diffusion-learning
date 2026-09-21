@@ -1,0 +1,41 @@
+# Phase 0- (DiT backbone variant): same overfit-one-batch correctness test as
+# overfit_ddpm.yaml, but with the TRANSFORMER backbone instead of the UNet.
+# This proves the DiT is a true drop-in replacement — only `model.name` changes;
+# the diffusion math, training loop, and samplers are untouched.
+#
+#   python scripts/train.py --config configs/overfit_dit.yaml
+#
+# Tiny DiT (few blocks, narrow width) so it still overfits in ~a minute on CPU/MPS.
+
+model:
+  name: dit             # <-- the only line that differs from a UNet run
+  image_size: 16
+  in_channels: 3
+  patch_size: 4         # 16/4 = 4 -> a 4x4 grid = 16 patch tokens
+  hidden_size: 128
+  depth: 4
+  num_heads: 4
+  mlp_ratio: 4.0
+
+diffusion:
+  objective: ddpm       # DiT works with either objective; ddpm here for a direct UNet comparison
+  schedule: cosine
+  timesteps: 200
+
+data:
+  dataset: toy
+  num_images: 8
+
+train:
+  steps: 2000
+  batch_size: 8
+  lr: 0.0003
+  ema_decay: 0.999
+  warmup_steps: 200
+  grad_clip: 1.0
+  log_every: 200
+  ckpt_every: 1000
+  seed: 0
+  device: auto
+  out_dir: runs/overfit_dit
+  overfit_one_batch: true

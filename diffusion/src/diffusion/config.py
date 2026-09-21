@@ -14,24 +14,57 @@ import yaml
 
 @dataclass
 class ModelConfig:
-    """Shape/size of the UNet. Kept tiny by default so Phase 0- runs on a laptop."""
+    """Which backbone, and its shape/size. `name` selects the architecture; the
+    two backbones read disjoint subsets of the remaining fields (a UNet ignores
+    the DiT fields and vice-versa), so one flat config can describe either.
 
+    Kept tiny by default so Phase 0- runs on a laptop."""
+
+    name: str = "unet"            # "unet" (conv backbone) | "dit" (transformer backbone)
     image_size: int = 16          # H = W of the (square) images
     in_channels: int = 3          # RGB
+
+    # --- UNet-specific ---
     base_channels: int = 32       # width of the first UNet level
     channel_mults: tuple = (1, 2) # channel multiplier per resolution level
     num_res_blocks: int = 1       # residual blocks per level
     time_embed_dim: int = 128     # width of the timestep embedding MLP
 
+    # --- DiT-specific (Phase 6 backbone; drop-in replacement for the UNet) ---
+    patch_size: int = 4           # image is cut into patch_size x patch_size tokens
+    hidden_size: int = 128        # transformer width (d_model)
+    depth: int = 4                # number of DiT (transformer) blocks
+    num_heads: int = 4            # attention heads (must divide hidden_size)
+    mlp_ratio: float = 4.0        # feed-forward expansion inside each block
+
 
 @dataclass
 class DiffusionConfig:
-    """The noising process. `timesteps` is T, the length of the DDPM chain."""
+    """The noising process + the training objective.
 
-    schedule: str = "cosine"      # "linear" | "cosine"
+    `objective` picks *what the network predicts and is scored against*:
+      - "ddpm": predict the noise eps (score matching); reverse with DDPM/DDIM.
+      - "flow": predict the velocity of a straight noise->data path (flow matching /
+                rectified flow); reverse by integrating the ODE. The beta schedule
+                is unused in this mode — flow matching defines its own path.
+      - "edm":  Karras et al. 2022 — a preconditioned denoiser in continuous
+                sigma-space, trained on log-normal sigma; reverse with the 2nd-order
+                Heun sampler. Uses the edm_* fields below, not the beta schedule.
+    `timesteps` is T, the length of the DDPM chain (ignored by flow / edm)."""
+
+    objective: str = "ddpm"       # "ddpm" | "flow" | "edm"
+    schedule: str = "cosine"      # "linear" | "cosine" (ddpm objective only)
     timesteps: int = 1000
     beta_start: float = 1e-4      # only used by the linear schedule
     beta_end: float = 0.02        # only used by the linear schedule
+
+    # --- EDM (Karras) parameters; only used when objective == "edm" ---
+    sigma_data: float = 0.5       # assumed std of the data (0.5 for images in [-1,1])
+    sigma_min: float = 0.002      # smallest noise level visited at sampling
+    sigma_max: float = 80.0       # largest noise level (near-pure-noise start)
+    rho: float = 7.0              # Karras schedule curvature (7 is the paper default)
+    P_mean: float = -1.2          # log-normal mean of training sigma:  ln(sigma) ~ N(P_mean, P_std^2)
+    P_std: float = 1.2            # log-normal std of training sigma
 
 
 @dataclass

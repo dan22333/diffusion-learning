@@ -1,0 +1,1827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diffusion methods, explained — DDPM · DDIM · Score · EDM · Flow matching · Guidance</title>
+<script>
+window.MathJax = {
+  tex: { inlineMath: [['\\(','\\)'],['$','$']], displayMath: [['$$','$$'],['\\[','\\]']] },
+  svg: { fontCache: 'global' },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" id="MathJax-script" async></script>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232d; --ink:#e6edf3; --muted:#9aa7b4;
+    --line:#2a3240; --accent:#6ea8fe; --green:#7ee787; --warn:#f0b74e; --pink:#ff7eb6;
+    --code:#c9d1d9; --shadow:rgba(0,0,0,.4);
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f8fb; --panel:#ffffff; --panel2:#eef2f7; --ink:#141a22; --muted:#59667a;
+      --line:#dde4ec; --accent:#2563eb; --green:#1a7f37; --warn:#b26a00; --pink:#c4267c;
+      --code:#1f2937; --shadow:rgba(20,30,50,.08); }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.68 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+
+  /* top progress + sticky mininav */
+  #bar{position:fixed;top:0;left:0;height:3px;background:var(--accent);width:0;z-index:50;transition:width .1s}
+  nav.mini{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--bg) 88%, transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);}
+  nav.mini .row{max-width:1000px;margin:0 auto;padding:9px 20px;display:flex;gap:6px;overflow-x:auto;
+    font-size:13px;white-space:nowrap;-ms-overflow-style:none;scrollbar-width:none}
+  nav.mini .row::-webkit-scrollbar{display:none}
+  nav.mini a{color:var(--muted);text-decoration:none;padding:4px 9px;border-radius:20px;border:1px solid transparent}
+  nav.mini a:hover{color:var(--ink);border-color:var(--line);background:var(--panel)}
+
+  .wrap{max-width:860px;margin:0 auto;padding:0 22px 140px}
+  header.top{padding:52px 0 22px}
+  h1{font-size:31px;line-height:1.22;margin:0 0 14px;letter-spacing:-.015em}
+  h1 .sub{display:block;font-size:16.5px;font-weight:400;color:var(--muted);margin-top:12px;line-height:1.5}
+  h2{font-size:24px;margin:64px 0 6px;letter-spacing:-.01em;padding-top:18px;
+    border-top:1px solid var(--line)}
+  h2 .n{color:var(--accent);font-variant-numeric:tabular-nums;margin-right:10px;font-weight:800}
+  h3{font-size:18.5px;margin:34px 0 6px}
+  h4{font-size:13px;margin:24px 0 4px;color:var(--accent);text-transform:uppercase;letter-spacing:.07em;font-weight:700}
+  p{margin:12px 0}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .lead{color:var(--muted);font-size:17.5px;line-height:1.6}
+  .hint{color:var(--muted);font-size:.9em;border-left:2px solid var(--accent);padding-left:10px;font-style:italic}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.86em;
+    background:var(--panel2);padding:2px 6px;border-radius:5px;color:var(--code)}
+  strong{font-weight:680}
+  em{font-style:italic}
+
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 24px;margin:28px 0;
+    box-shadow:0 1px 3px var(--shadow)}
+  .toc h4{margin-top:0}
+  .toc ol{margin:6px 0 0;padding-left:22px;columns:2;column-gap:38px}
+  @media(max-width:640px){.toc ol{columns:1}}
+  .toc li{margin:5px 0;break-inside:avoid}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:4px 24px 10px;margin:22px 0;
+    box-shadow:0 1px 3px var(--shadow)}
+  .box{border-left:3px solid var(--accent);background:var(--panel2);border-radius:0 12px 12px 0;
+    padding:3px 20px;margin:20px 0}
+  .box.key{border-left-color:var(--green)}
+  .box.warn{border-left-color:var(--warn)}
+  .box.pink{border-left-color:var(--pink)}
+  .box.repo{border-left-color:var(--accent);background:transparent;border:1px dashed var(--line);border-radius:12px}
+  .box .tag{display:inline-block;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;
+    color:var(--muted);margin-top:13px}
+  .box.key .tag{color:var(--green)} .box.warn .tag{color:var(--warn)} .box.pink .tag{color:var(--pink)}
+
+  .eq{overflow-x:auto;overflow-y:hidden;padding:2px 2px}
+  .muted{color:var(--muted)}
+  hr{border:0;border-top:1px solid var(--line);margin:40px 0}
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14.5px;display:block;overflow-x:auto}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);font-weight:650}
+  ul,ol{padding-left:24px}
+  li{margin:7px 0}
+  .fn{font-size:13.5px;color:var(--muted)}
+  .pill{display:inline-block;font-size:11.5px;font-weight:650;padding:1px 9px;border-radius:20px;
+    border:1px solid var(--line);color:var(--muted);vertical-align:middle}
+  .pill.ok{color:var(--green);border-color:var(--green)}
+  .pill.no{color:var(--warn);border-color:var(--warn)}
+  .legend{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:14.5px;margin:10px 0}
+  .legend code{white-space:nowrap}
+  .kbd{font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div id="bar"></div>
+<nav class="mini"><div class="row">
+  <a href="#picture">Map</a>
+  <a href="#ddpm">DDPM</a>
+  <a href="#ddim">DDIM</a>
+  <a href="#score">Score</a>
+  <a href="#edm">EDM</a>
+  <a href="#flow">Flow</a>
+  <a href="#guidance">Guidance</a>
+  <a href="#guidance-best">Best guidance</a>
+  <a href="#arch">U‑Net vs DiT</a>
+  <a href="#best">Best practice</a>
+  <a href="#repo">In this repo</a>
+  <a href="#distill">Distillation</a>
+</div></nav>
+
+<div class="wrap">
+
+<header class="top">
+  <h1>Diffusion methods, explained — the math and the <em>why</em>
+    <span class="sub">DDPM · DDIM · score matching + Langevin · EDM · flow matching · classifier &amp; classifier‑free guidance ·
+    U‑Net vs DiT · and what is actually current best practice. Written to answer "but <em>why</em> is that valid?" at each step.</span>
+  </h1>
+</header>
+
+<div class="toc">
+  <h4>Contents</h4>
+  <ol>
+    <li><a href="#picture">The one picture that unifies everything</a></li>
+    <li><a href="#ddpm">DDPM — the baseline</a></li>
+    <li><a href="#ddim">DDIM — why it's valid</a></li>
+    <li><a href="#score">Score matching &amp; why Langevin converges</a></li>
+    <li><a href="#edm">EDM — the design space that unifies them</a></li>
+    <li><a href="#flow">Flow matching — full derivation</a></li>
+    <li><a href="#guidance">Guidance: classifier &amp; classifier‑free</a></li>
+    <li><a href="#guidance-score-flow">Guidance in score‑based &amp; flow models</a></li>
+    <li><a href="#guidance-best">Is CFG the best? Best‑practice guidance</a></li>
+    <li><a href="#arch">Where it lives: U‑Net vs DiT</a></li>
+    <li><a href="#best">Current best practice (the summary)</a></li>
+    <li><a href="#repo">What this repo implements now</a></li>
+    <li><a href="#distill">Distillation — 1–4 step sampling</a></li>
+  </ol>
+</div>
+
+<div class="box">
+<span class="tag">How to read this</span>
+<p>Each method gets the same three passes: <strong>Intuition</strong> (what it's doing), <strong>Math</strong> (why it's
+correct), and where useful a <strong class="muted">In this repo</strong> box pointing at the exact file. If you only skim,
+read §0 (the map) and §10 (best practice) — everything in between justifies those two.</p>
+<h4 style="margin-bottom:2px">Symbol legend</h4>
+<div class="legend">
+  <code>x_0</code><span>a clean data sample (an image). <span class="kbd">In flow‑matching §5 the convention flips — see the note there.</span></span>
+  <code>x_t</code><span>the noisy sample at time / noise level \(t\)</span>
+  <code>\bar\alpha_t</code><span>how much <em>signal</em> survives at step \(t\) (goes \(1\!\to\!0\))</span>
+  <code>\varepsilon</code><span>the Gaussian noise that was added; the DDPM network predicts it</span>
+  <code>\sigma</code><span>a noise level (EDM parametrizes everything by \(\sigma\) instead of \(t\))</span>
+  <code>s(x)=\nabla\log p</code><span>the <em>score</em> — the gradient of log‑density</span>
+  <code>u_t</code><span>the <em>velocity</em> field learned by flow matching (some papers write \(v\))</span>
+  <code>y</code> / <code>c</code><span>the condition (class label, text prompt, CLIP embedding)</span>
+  <code>w</code><span>the guidance scale (\(w>1\) strengthens the condition)</span>
+</div>
+</div>
+
+<!-- ============================================================ 0 -->
+<h2 id="picture"><span class="n">0</span>The one picture that unifies all of it</h2>
+<p class="lead">Every method here reverses the <em>same</em> process: one that gradually turns data into noise. They differ only in
+<strong>what the network predicts</strong> and <strong>which equation you integrate to go back</strong>. Hold these three facts and
+the rest is bookkeeping.</p>
+
+<div class="card">
+<h4>Fact 1 — the forward process is fixed and closed‑form</h4>
+<p>Take data \(x_0\), add Gaussian noise so that at "time" \(t\):</p>
+<div class="eq">$$x_t=\sqrt{\bar\alpha_t}\,x_0+\sqrt{1-\bar\alpha_t}\,\varepsilon,\qquad \varepsilon\sim\mathcal N(0,I).$$</div>
+<p>At \(t{=}0\) it's data; at \(t{=}T\), \(\bar\alpha_t\to0\) so \(x_T\) is pure noise. No network yet — this is a definition.</p>
+
+<h4>Fact 2 — everything the network could predict is the same information</h4>
+<p>Given \(x_t\), these are all linear reparametrizations of one another:</p>
+<div class="eq">$$\underbrace{\varepsilon}_{\text{noise (DDPM)}}\ \Longleftrightarrow\ \underbrace{x_0}_{\text{clean image}}\ \Longleftrightarrow\ \underbrace{\nabla_{x_t}\log p_t(x_t)}_{\text{score}}\ \Longleftrightarrow\ \underbrace{u_t}_{\text{velocity (flow)}}.$$</div>
+<p>The bridge you'll use constantly:</p>
+<div class="eq">$$\boxed{\;\nabla_{x_t}\log p_t(x_t)=-\,\frac{\varepsilon}{\sqrt{1-\bar\alpha_t}}\;}$$</div>
+<p>So a DDPM noise‑predictor <em>is</em> a score network up to a known scale. This is why "score matching" and "DDPM" are secretly the same training run — and why guidance (which edits the score) applies to all of them.</p>
+
+<h4>Fact 3 — two legal ways to go backward</h4>
+<p>There is a <strong>stochastic</strong> reverse (an SDE — DDPM, Langevin) and a <strong>deterministic</strong> one (an ODE — DDIM,
+flow, EDM's ODE) that pass through the <em>same</em> sequence of distributions \(p_t\). Choosing one is a <strong>sampler</strong>
+decision, not a model change.</p>
+</div>
+
+<div class="box key">
+<span class="tag">Keep this table in your head</span>
+<table>
+<tr><th>Method</th><th>Predicts</th><th>Reverse is a…</th><th>New training to switch?</th></tr>
+<tr><td>DDPM</td><td>noise \(\varepsilon\)</td><td>stochastic SDE</td><td>—</td></tr>
+<tr><td>DDIM</td><td>\(\varepsilon\) (<em>same net</em>)</td><td>deterministic ODE</td><td><span class="pill ok">no</span></td></tr>
+<tr><td>Score / Langevin</td><td>score \(\nabla\log p_t\)</td><td>stochastic SDE (MCMC)</td><td><span class="pill ok">no</span> (rescaled DDPM)</td></tr>
+<tr><td>EDM</td><td>clean \(x_0\) (preconditioned)</td><td>either; ODE + Heun in practice</td><td><span class="pill no">yes</span> (σ‑space + preconditioning)</td></tr>
+<tr><td>Flow matching</td><td>velocity \(u_t\)</td><td>deterministic ODE</td><td><span class="pill no">yes</span> (velocity target)</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ 1 -->
+<h2 id="ddpm"><span class="n">1</span>DDPM — the baseline</h2>
+<p class="lead">DDPM = fix a process that turns data into noise, then learn to undo it one small step at a time. This section is the
+<strong>entire</strong> story, in order, nothing skipped: <strong>A</strong> the three distributions → the forward process → <strong>B</strong> the one idea (use ① to reach ②) → <strong>C</strong> training → <strong>D</strong> is the step even Gaussian? → <strong>E</strong> its mean (exact) and variance (\(\tilde\beta_t\)) → <strong>F</strong> the sampling loop you actually run.</p>
+
+<h4>The whole thing in one frame — three distributions, and the plan</h4>
+<p>Everything below is about <strong>one step backward</strong>: you have a noisy \(x_t\) and want a slightly cleaner \(x_{t-1}\). Three
+distributions describe that step. Learn these names once and the rest is bookkeeping.</p>
+<div class="box key">
+<span class="tag">① ② ③ — the cast</span>
+<table>
+<tr><th></th><th>Distribution</th><th>In words</th><th>Status</th></tr>
+<tr><td><strong>②</strong></td><td>\(q(x_{t-1}\mid x_t)\)</td><td>the true step back — <em>what we want to sample</em></td><td><span class="pill no">intractable</span></td></tr>
+<tr><td><strong>①</strong></td><td>\(q(x_{t-1}\mid x_t,x_0)\)</td><td>the same step <em>if a genie told us the clean image \(x_0\)</em></td><td><span class="pill ok">exact Gaussian</span></td></tr>
+<tr><td><strong>③</strong></td><td>\(p_\theta(x_{t-1}\mid x_t)\)</td><td>our model: ①'s formula with an <em>estimate</em> of \(x_0\) plugged in</td><td><span class="pill ok">what we build &amp; sample</span></td></tr>
+</table>
+<p style="margin-bottom:0"><strong>The plan in one line:</strong> we can't compute ②, so we build ③ out of ① — and it turns out ③ ≈ ②. The rest
+of this section is <em>why that substitution is not only allowed but exact in the mean.</em></p>
+</div>
+
+<h4>A. The forward process — pure definition, no network</h4>
+<p><strong>A1. The noising chain.</strong> Pick a tiny variance \(\beta_t\in(0,1)\) per step and define</p>
+<div class="eq">$$q(x_t\mid x_{t-1})=\mathcal N\big(\sqrt{\alpha_t}\,x_{t-1},\ \beta_t I\big),\qquad \alpha_t:=1-\beta_t.$$</div>
+<p>Each step shrinks the signal slightly and adds a little Gaussian noise. Run it \(T\) times and \(x_T\) is indistinguishable from pure noise.</p>
+<p><strong>A2. The closed‑form jump to any \(t\).</strong> Composing Gaussians, you can skip straight from \(x_0\) to \(x_t\):</p>
+<div class="eq">$$q(x_t\mid x_0)=\mathcal N\big(\sqrt{\bar\alpha_t}\,x_0,\ (1-\bar\alpha_t)I\big),\quad \bar\alpha_t:=\textstyle\prod_{s=1}^{t}\alpha_s
+\quad\Longleftrightarrow\quad x_t=\sqrt{\bar\alpha_t}\,x_0+\sqrt{1-\bar\alpha_t}\,\varepsilon,\ \ \varepsilon\sim\mathcal N(0,I).$$</div>
+<p>This is the only forward fact training uses — it's the <em>marginal</em>, and it's why one network handles all noise levels.</p>
+
+<h4>B. The one idea that makes it work — use ① to reach ②</h4>
+<p>To generate we start at noise \(x_T\sim\mathcal N(0,I)\) and undo the chain one step at a time with a learned Gaussian
+\(p_\theta(x_{t-1}\mid x_t)\) (that's ③). Its ideal target is ②, which is out of reach. Everything hinges on one substitution — and it
+deserves to be understood in plain words <em>before</em> any formulas, because the rest of the section is just this paragraph made rigorous.</p>
+
+<div class="box pink">
+<span class="tag">The whole idea, slowly — read this first</span>
+<p><strong>The situation.</strong> You're standing at a noisy image \(x_t\) and want one small step back toward a cleaner \(x_{t-1}\). If a
+genie told you the original clean image \(x_0\), there is an <em>exact</em> formula for where \(x_{t-1}\) should sit — its center is
+\(\tilde\mu_t(x_t,x_0)\). That's distribution <strong>①</strong>. The catch: <strong>you don't have \(x_0\)</strong> — it's what you're
+generating — and many different clean images could have produced this one \(x_t\).</p>
+
+<p><strong>The honest answer, ②.</strong> Not knowing which \(x_0\) it was, the honest distribution for \(x_{t-1}\) must account for
+<em>every</em> plausible \(x_0\), weighted by how likely it is given \(x_t\). Stacking all those bells is <strong>②</strong>, the true
+reverse step you want to sample. This isn't hand‑waving — it's the literal definition of ②, "average ① over all \(x_0\) that could explain \(x_t\)":</p>
+<div class="eq">$$②=q(x_{t-1}\mid x_t)=\int \underbrace{q(x_{t-1}\mid x_t,x_0)}_{①}\ \underbrace{q(x_0\mid x_t)}_{\text{weight of each }x_0}\,dx_0.$$</div>
+<p>And when you average a pile of bells, <strong>the center of the pile = the average of their individual centers.</strong> Each ①‑bell is centered
+at \(\tilde\mu_t(x_t,x_0)\), so:</p>
+<div class="eq">$$\text{center of ②}=\text{average over plausible }x_0\text{ of }\ \tilde\mu_t(x_t,x_0).$$</div>
+<p>So ②'s center is <em>completely determined</em> by ① — we just have to do that average. The next line is the shortcut that avoids the integral entirely.</p>
+
+<p><strong>Why one estimate replaces the whole average.</strong> Look at the shape of that center — it's a <em>straight line</em> in \(x_0\)
+(a slope \(b\) times \(x_0\), plus a piece that only uses the \(x_t\) you already hold):</p>
+<div class="eq">$$\tilde\mu_t(x_t,x_0)=b\,x_0+a(x_t).$$</div>
+<p>Straight lines have a magic property: <strong>the average of the outputs equals the output at the average input.</strong> Concretely, pretend
+\(\tilde\mu=2x_0+5\) and \(x_0\) could be \(1,3,8\):</p>
+<div class="eq">$$\underbrace{\tfrac{(2\cdot1+5)+(2\cdot3+5)+(2\cdot8+5)}{3}}_{\text{average the outputs}}=\frac{7+11+21}{3}=13
+\ \ =\ \ \underbrace{2\cdot\tfrac{1+3+8}{3}+5}_{\text{plug in the average input}}=2\cdot4+5=13.$$</div>
+<p>So you never loop over a million possible \(x_0\)'s. You need <strong>one number</strong> — the <em>average clean image</em> consistent with
+\(x_t\), call it \(\hat x_0\) — and plug it in once: \(\ \text{center of ②}=\tilde\mu_t(x_t,\hat x_0)\). Because the formula is linear,
+plugging in the estimate doesn't <em>approximate</em> the average — it <strong>equals</strong> it. <em>Using \(\hat x_0\) is using the expected value.</em></p>
+
+<p><strong>Where \(\hat x_0\) comes from — the part that connects to training.</strong> That number is \(\hat x_0=\mathbb E[x_0\mid x_t]\),
+"the average clean image behind \(x_t\)." Two routes to it:</p>
+<ul>
+  <li><strong>Route A (brute force):</strong> sample many \(x_0\sim q(x_0\mid x_t)\) and average them — literally the definition of the
+      expected value. Too expensive; we don't do this at inference.</li>
+  <li><strong>Route B (what we do):</strong> the <strong>network hands it to you</strong>, because MSE training <em>is</em> an averaging
+      operation — the value minimizing squared error is provably the conditional mean \(\mathbb E[x_0\mid x_t]\). Over the dataset, least
+      squares settles the net's output onto the average clean image behind each \(x_t\).</li>
+</ul>
+<p>So the optimization is exactly what computes the expected value — same \(\mathbb E[x_0\mid x_t]\) as brute‑force averaging, done once during
+training. <strong>That is why we plug in the estimate, and what "using it" means:</strong> \(\hat x_0\) is the expected clean image, MSE produced
+it, and — because \(\tilde\mu_t\) is a straight line — dropping it into ①'s formula lands you exactly on ②'s center. Sections C–F below
+are just this one paragraph made rigorous: <strong>C</strong> trains the net that produces \(\hat x_0\); <strong>D–E</strong> show why the Gaussian ③ hugs ② (Gaussian shape, exact mean, width \(\tilde\beta_t\)); <strong>F</strong> runs the sampler that uses it.</p>
+</div>
+
+<h4>C. Training — from likelihood to a one‑line loss</h4>
+<p>Goal of training: get the network to output \(\hat x_0=\mathbb E[x_0\mid x_t]\) (equivalently \(\hat\varepsilon\)), the estimate section B needs.
+Here is the derivation that turns "maximize likelihood" into "predict the noise by MSE," with the \(x_0\)‑conditioning trick made explicit.</p>
+
+<p><strong>C1. The ELBO splits into per‑step KLs.</strong> This is the step people wave through, so here is the whole trick, in five moves.</p>
+
+<div class="box key">
+<span class="tag">The ELBO trick, move by move</span>
+<p><strong>(i) Can't integrate — so bound it.</strong> \(\log p_\theta(x_0)=\log\int p_\theta(x_{0:T})\,dx_{1:T}\) is intractable. Multiply
+and divide by the forward chain \(q(x_{1:T}\mid x_0)\), then push \(\log\) inside the expectation with Jensen:</p>
+<div class="eq">$$\log p_\theta(x_0)=\log\mathbb E_{q}\!\Big[\tfrac{p_\theta(x_{0:T})}{q(x_{1:T}\mid x_0)}\Big]\ \ge\ \mathbb E_{q}\Big[\log\tfrac{p_\theta(x_{0:T})}{q(x_{1:T}\mid x_0)}\Big]\ =:\ \text{ELBO}.$$</div>
+
+<p><strong>(ii) Both joints factor.</strong> The reverse model is a Markov chain, and so is the forward one:</p>
+<div class="eq">$$p_\theta(x_{0:T})=p(x_T)\!\prod_{t\ge1}\! p_\theta(x_{t-1}\mid x_t),\qquad q(x_{1:T}\mid x_0)=\prod_{t\ge1} q(x_t\mid x_{t-1}).$$</div>
+<p>Putting these in the bound gives \(-\log p_\theta(x_0)\le \mathbb E_q\big[-\log p(x_T)+\sum_{t\ge1}\log\tfrac{q(x_t\mid x_{t-1})}{p_\theta(x_{t-1}\mid x_t)}\big]\).</p>
+
+<p><strong>(iii) The key move — rewrite the forward step conditioned on \(x_0\).</strong> Taken as written, \(q(x_t\mid x_{t-1})\) points the
+"wrong way" and won't pair with \(p_\theta(x_{t-1}\mid x_t)\). Add \(x_0\) to the conditioning (free, by the Markov property) and flip with Bayes:</p>
+<div class="eq">$$q(x_t\mid x_{t-1})=q(x_t\mid x_{t-1},x_0)=\underbrace{q(x_{t-1}\mid x_t,x_0)}_{\text{now points backward}}\cdot\frac{q(x_t\mid x_0)}{q(x_{t-1}\mid x_0)}.$$</div>
+
+<p><strong>(iv) Telescope.</strong> Substitute that for \(t\ge2\). The ratio \(\tfrac{q(x_t\mid x_0)}{q(x_{t-1}\mid x_0)}\) is a telescoping
+product — nearly everything cancels, leaving only the two endpoints \(\tfrac{q(x_T\mid x_0)}{q(x_1\mid x_0)}\). Regrouping the logs into KLs:</p>
+<div class="eq">$$-\log p_\theta(x_0)\ \le\ \underbrace{\mathrm{KL}\big(q(x_T\mid x_0)\,\|\,p(x_T)\big)}_{L_T\ \text{(no }\theta\text{, }\approx0)}
+\;+\;\sum_{t>1}\underbrace{\mathrm{KL}\big(q(x_{t-1}\mid x_t,x_0)\,\|\,p_\theta(x_{t-1}\mid x_t)\big)}_{L_{t-1}}
+\;\underbrace{-\ \log p_\theta(x_0\mid x_1)}_{L_0}.$$</div>
+
+<p><strong>(v) What the trick bought us.</strong> The intractable target \(q(x_{t-1}\mid x_t)\) (②) never appears. Every learnable term
+\(L_{t-1}\) instead compares \(p_\theta\) against the \(x_0\)‑<em>conditioned</em> posterior \(q(x_{t-1}\mid x_t,x_0)\) — <strong>①</strong> — which
+C2 shows is a closed‑form Gaussian. Conditioning on \(x_0\) is the entire reason the loss is computable.</p>
+</div>
+
+<p><strong>C2. ① is an exact Gaussian (Bayes).</strong> Because conditioning on \(x_0\) makes everything jointly Gaussian, flip it with Bayes (Markov: \(q(x_t\mid x_{t-1},x_0)=q(x_t\mid x_{t-1})\)):</p>
+<div class="eq">$$\underbrace{q(x_{t-1}\mid x_t,x_0)}_{①}\ \propto\ \underbrace{q(x_t\mid x_{t-1})}_{\mathcal N(\sqrt{\alpha_t}x_{t-1},\beta_t I)}\cdot\underbrace{q(x_{t-1}\mid x_0)}_{\mathcal N(\sqrt{\bar\alpha_{t-1}}x_0,(1-\bar\alpha_{t-1})I)}.$$</div>
+<p>A product of Gaussians is Gaussian; completing the square gives the closed form in known constants, \(x_0\) and \(x_t\):</p>
+<div class="eq">$$①=\mathcal N\big(\tilde\mu_t(x_t,x_0),\,\tilde\beta_t I\big),\quad
+\tilde\mu_t=\frac{\sqrt{\bar\alpha_{t-1}}\,\beta_t}{1-\bar\alpha_t}x_0+\frac{\sqrt{\alpha_t}\,(1-\bar\alpha_{t-1})}{1-\bar\alpha_t}x_t,\quad
+\tilde\beta_t=\frac{1-\bar\alpha_{t-1}}{1-\bar\alpha_t}\beta_t.$$</div>
+<p class="hint">Flag for §2: that posterior std \(\sqrt{\tilde\beta_t}\) is exactly the \(\sigma_t\) DDIM keeps as a free knob — DDPM sits at \(\sigma_t=\sqrt{\tilde\beta_t}\), DDIM at \(\sigma_t=0\).</p>
+
+<p><strong>C3. The KL becomes a squared‑mean gap.</strong> ① and \(p_\theta\) are Gaussians with the <em>same</em> variance, so their KL is just how far the means sit apart:</p>
+<div class="eq">$$L_{t-1}=\frac{1}{2\tilde\beta_t}\big\lVert \tilde\mu_t(x_t,x_0)-\mu_\theta(x_t,t)\big\rVert^2.$$</div>
+<p>Training the reverse step therefore means one thing: <strong>make \(\mu_\theta\) match the exact posterior mean \(\tilde\mu_t\).</strong></p>
+
+<p><strong>C4. Reparametrize to noise → the final loss.</strong> We could train \(\mu_\theta\) to hit \(\tilde\mu_t\) directly, but there's a
+cleaner target hiding inside. Recall from A2 that \(x_t=\sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\,\varepsilon\), so
+\(x_0=(x_t-\sqrt{1-\bar\alpha_t}\,\varepsilon)/\sqrt{\bar\alpha_t}\). Substitute that into \(\tilde\mu_t\) and the \(x_0\) disappears — the
+posterior mean is just \(x_t\) minus a scaled copy of the <em>noise</em>:</p>
+<div class="eq">$$\tilde\mu_t=\frac{1}{\sqrt{\alpha_t}}\Big(x_t-\frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\,\varepsilon\Big).$$</div>
+<p>Now the trick. Give the network's mean the <em>identical shape</em>, with its predicted \(\varepsilon_\theta\) in the one slot where the
+true \(\varepsilon\) sits:</p>
+<div class="eq">$$\mu_\theta(x_t,t)=\frac{1}{\sqrt{\alpha_t}}\Big(x_t-\frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\,\varepsilon_\theta(x_t,t)\Big).$$</div>
+<p>Subtract the two. Since \(x_t\) is a <strong>known input, it's the same on both sides and cancels</strong> — only the noise slot differs:</p>
+<div class="eq">$$\tilde\mu_t-\mu_\theta=\frac{\beta_t}{\sqrt{\alpha_t}\,\sqrt{1-\bar\alpha_t}}\big(\varepsilon_\theta-\varepsilon\big)
+\ \Longrightarrow\ \big\lVert\tilde\mu_t-\mu_\theta\big\rVert^2=\underbrace{\frac{\beta_t^2}{\alpha_t(1-\bar\alpha_t)}}_{\text{a constant in }t}\big\lVert\varepsilon-\varepsilon_\theta\big\rVert^2.$$</div>
+<p>That's what "the mean gap collapses into a noise gap" means: <strong>matching the mean is <em>exactly</em> matching the noise</strong>, up
+to a per‑\(t\) scalar. Feed it back into \(L_{t-1}=\tfrac{1}{2\tilde\beta_t}\lVert\tilde\mu_t-\mu_\theta\rVert^2\), drop that scalar weight
+(DDPM found unweighted trains better), and you're left with the loss you actually run:</p>
+<div class="eq">$$\boxed{\;\mathcal L=\mathbb E_{x_0,\,t,\,\varepsilon}\big[\lVert \varepsilon-\varepsilon_\theta(x_t,t)\rVert^2\big]\;}\qquad x_t=\sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\,\varepsilon.$$</div>
+<p>Why predict \(\varepsilon\) rather than \(\mu\)? Same information (they're one linear map apart), but \(\varepsilon\) is a fixed
+unit‑variance target at every noise level — much easier to fit than a \(\mu\) whose scale drifts with \(t\). Note too: nothing here
+references chaining steps, only the marginal A2 — the hook §2 pulls on.</p>
+
+<h4>D. First — is the reverse step even a Gaussian?</h4>
+<p>Everything from here on models ③ as a Gaussian. That is only legal if the <em>true</em> reverse ② is (nearly) Gaussian — and ② is a <strong>mixture</strong> of bells, which in general is <em>not</em>. So this question comes before any talk of its mean or variance. The whole logic is short; the detailed proof (two independent derivations) is the deep‑dive box after §E.</p>
+
+<div class="box key">
+<span class="tag">Why a small step collapses the mixture to one Gaussian — the whole logic</span>
+<ol>
+  <li><strong>② is a pile of bells.</strong> One exact Gaussian ① \(=\mathcal N(\tilde\mu_t,\tilde\beta_t)\) per candidate clean image \(x_0\), weighted by \(q(x_0\mid x_t)\). A pile can be skewed or multi‑humped — not obviously Gaussian.</li>
+  <li><strong>"Gaussian?" ⟺ "are the bells stacked?"</strong> Each bell sits at \(\tilde\mu_t=b\,x_0+a(x_t)\), so the pile is one clean bell exactly when the centers are packed tighter than a single bell is <em>wide</em>. Two lengths decide it:
+    <div class="eq">$$\underbrace{\text{bell width}=\sqrt{\tilde\beta_t}=O(\sqrt{\beta_t})}_{\text{how fat each ① is}}\quad\text{vs.}\quad\underbrace{\text{center scatter}=b\times(\text{spread of }x_0)=O(\beta_t)}_{\text{how far the ①'s drift apart}}.$$</div></li>
+  <li><strong>A small step wins the race.</strong> \(\dfrac{\text{scatter}}{\text{width}}=O(\sqrt{\beta_t})\to0\): the centers pack together <em>faster</em> than the bells narrow, so the bells overlap and the pile becomes one Gaussian. (Equivalently — a narrow center‑cloud convolved with a much wider Gaussian blur <em>is</em> that Gaussian, however ugly the \(x_0\) posterior.)</li>
+</ol>
+<p class="hint"><strong>The objection to kill first:</strong> a small step does <em>not</em> pin down \(x_0\) — \(x_t\) still has many possible clean images (\(\operatorname{Var}(x_0\mid x_t)\) stays large). It pins down the <em>immediate predecessor</em> \(x_{t-1}\): since \(x_t=\sqrt{\alpha_t}x_{t-1}+\sqrt{\beta_t}\,\varepsilon\) with \(\beta_t\) tiny, \(x_{t-1}\approx x_t-\sqrt{\beta_t}\,\varepsilon\) sits in a \(\pm\sqrt{\beta_t}\) sliver <em>whatever</em> \(x_0\) turns out to be. The many \(x_0\) each move that landing point by only \(b\propto\beta_t\to0\) — so the <em>destination</em> stays uncertain while the <em>next step</em> is nearly forced. The \(x_0\) choice is made gradually over \(\sim\!1000\) steps, never in one.</p>
+<p><strong>Big steps break it.</strong> Jump far and \(b=O(1)\): different \(x_0\) send \(x_{t-1}\) to genuinely different places, ② spreads and can go multimodal. That is why DDPM needs many small steps — and why DDIM's big jumps rely on the exact marginal‑matching argument in §2 instead, not on this one.</p>
+<p class="hint">This licenses the two numbers §E now pins down: the Gaussian's <strong>center</strong> (matched to ② <em>exactly</em>, because \(\tilde\mu_t\) is linear in \(x_0\)) and its <strong>width</strong> (fixed to \(\tilde\beta_t\); the extra scatter term \(b^2\operatorname{Var}(x_0\mid x_t)=O(\beta_t^2)\) is dropped as higher order). Detailed proof of the collapse: the two‑views deep dive after §E.</p>
+</div>
+
+<h4>E. Where \(x_0\) goes — ②'s center (exact) and its width (\(\tilde\beta_t\))</h4>
+<p>§D established ② is a Gaussian; now pin its two numbers. The center lands on ②'s center <em>exactly</em>; the width keeps only \(\tilde\beta_t\). Here it is rigorously — Fact 1 (regression → conditional average), Fact 2 (linearity), a check that this average <em>is</em> ②'s center, then ②'s variance and the one honest approximation.</p>
+
+<div class="box key">
+<span class="tag">§E in full — the center substitution is exact; the width keeps only \(\tilde\beta_t\)</span>
+<p>§B argued it in words; here it is as three checkable facts. \(\tilde\mu_t(x_t,x_0)\) (the mean of <strong>①</strong>) carries \(x_0\), yet the
+thing sampling needs (<strong>②</strong>) carries none. This box proves the substitution is exact in the mean — Fact 1 (regression → average),
+Fact 2 (linearity), then a check that the average <em>is</em> ②'s center.</p>
+<p><strong>Setup.</strong> The network \(\mu_\theta(x_t,t)\) is fed <em>only</em> \(x_t\) — structurally blind to \(x_0\) — and training minimizes the
+C3 loss averaged over <em>every</em> \((x_0,x_t)\) pair the data produces, \(\min_\theta \mathbb E_{x_0,x_t}\lVert \tilde\mu_t(x_t,x_0)-\mu_\theta(x_t)\rVert^2\).
+First read \(\tilde\mu_t\) from C2 as a straight‑line function of \(x_0\) — a fixed slope times \(x_0\), plus a piece that only depends on the known \(x_t\):</p>
+<div class="eq">$$\tilde\mu_t(x_t,x_0)=\underbrace{\frac{\sqrt{\bar\alpha_{t-1}}\,\beta_t}{1-\bar\alpha_t}}_{\text{slope }b\ (\text{a number})}\,x_0\ +\ \underbrace{\frac{\sqrt{\alpha_t}\,(1-\bar\alpha_{t-1})}{1-\bar\alpha_t}\,x_t}_{\text{call it }a(x_t)}\ =\ b\,x_0+a(x_t).$$</div>
+<p>Now two facts finish the argument. Take them one at a time.</p>
+
+<p><strong>Fact 1 — a network that only sees \(x_t\) is driven to the conditional mean.</strong> Fix an \(x_t\). Its target \(\tilde\mu_t(x_t,x_0)\)
+is a <em>random vector</em> (random because \(x_0\) is still uncertain given \(x_t\)); the net must commit to one output \(f=\mu_\theta(x_t)\).
+Which single point is closest, in mean square, to a random vector? Its mean. Add and subtract \(m:=\mathbb E[\tilde\mu_t\mid x_t]\):</p>
+<div class="eq">$$\mathbb E\big[\lVert\tilde\mu_t-f\rVert^2\mid x_t\big]=\underbrace{\mathbb E\big[\lVert\tilde\mu_t-m\rVert^2\mid x_t\big]}_{\text{fixed, no }f}+\lVert m-f\rVert^2.$$</div>
+<p>The cross term vanishes because \(\mathbb E[\tilde\mu_t-m\mid x_t]=0\). Only the last term depends on \(f\), and it's killed by \(f=m\). So
+the optimum is \(\mu_\theta^\star(x_t)=\mathbb E[\tilde\mu_t\mid x_t]\) — <em>this is the whole reason MSE regression returns a conditional average.</em></p>
+
+<p><strong>Fact 2 — for a straight‑line function, "average then evaluate" = "evaluate at the average".</strong> Push the expectation through the
+affine form (constants \(a,b\) come straight out):</p>
+<div class="eq">$$\mathbb E[\tilde\mu_t\mid x_t]=\mathbb E[b\,x_0+a(x_t)\mid x_t]=b\,\underbrace{\mathbb E[x_0\mid x_t]}_{=\ \hat x_0}+a(x_t)=\tilde\mu_t(x_t,\hat x_0).$$</div>
+<p>That is where \(x_0\) goes: it sits inside an expectation, and because \(\tilde\mu_t\) is linear the expectation lands on \(\hat x_0\).
+<strong>The net outputs \(\tilde\mu_t(x_t,\hat x_0)\) — the true \(x_0\) is never needed, only its conditional mean, which the net supplies.</strong>
+(If \(\tilde\mu_t\) were <em>curved</em> in \(x_0\) this would only be approximate — a Jensen gap — but here it's exactly linear.)</p>
+
+<p><strong>The check we actually care about.</strong> Facts 1–2 fixed <em>our model's</em> center: \(\mu_\theta=\tilde\mu_t(x_t,\hat x_0)\). But
+the distribution we truly wish we could sample is <strong>②</strong>. So the real question is: <em>is our center in the right place — does
+\(\tilde\mu_t(x_t,\hat x_0)\) equal the center of ②?</em> To answer, we need ②'s center, so let's compute it. (Yes, you want the mean of
+\(p_\theta\) at runtime — we already have it, \(\mu_\theta\); this step is the <em>verification</em> that \(\mu_\theta\) lands on the true target.)</p>
+<p>Computing ②'s center means knowing how ② is built. Sampling \(x_{t-1}\) from ② is a two‑step recipe:</p>
+<div class="eq">$$\text{(1) draw a clean image }x_0\sim q(x_0\mid x_t);\qquad\text{(2) draw }x_{t-1}\sim ①(x_0)=\mathcal N\big(\tilde\mu_t(x_t,x_0),\,\tilde\beta_t I\big).$$</div>
+<p>Each \(x_0\) gives a bell centered at \(\tilde\mu_t(x_t,x_0)\); ② is the <strong>pile‑up of all those bells</strong> — a mixture.</p>
+
+<p><strong>Center of ② — average it in two stages (law of total expectation).</strong> The center of ② is \(\mathbb E[x_{t-1}\mid x_t]\)
+(since ② <em>is</em> the distribution \(q(x_{t-1}\mid x_t)\)). Averaging over the recipe means: first average <em>inside</em> the bell you landed
+in (that returns its center \(\tilde\mu_t(x_t,x_0)\)), then average those centers over <em>which \(x_0\)</em> the first step drew:</p>
+<div class="eq">$$\underbrace{\mathbb E[x_{t-1}\mid x_t]}_{\text{center of ②}}=\mathbb E_{x_0\mid x_t}\big[\ \underbrace{\mathbb E[x_{t-1}\mid x_t,x_0]}_{\text{inner: bell's center }=\ \tilde\mu_t(x_t,x_0)}\ \big]\overset{\text{Fact 2}}{=}\tilde\mu_t(x_t,\hat x_0).$$</div>
+<p class="hint">The two \(\mathbb E\)'s differ only in what they condition on: the <em>outer</em> \(\mathbb E[\,\cdot\mid x_t]\) is what we want (average given
+just \(x_t\)); the <em>inner</em> \(\mathbb E[\,\cdot\mid x_t,x_0]\) also fixes \(x_0\), giving one bell's center. The law of total expectation says the
+outer one = average of the inner ones over \(x_0\) — which is why the two‑stage split is exact.</p>
+<p class="hint"><strong>No typo — \(q\) vs \(\mathbb E\) are two different things from the same conditioning.</strong>
+\(q(x_{t-1}\mid x_t,x_0)=①\) is the whole <em>distribution</em> (the entire bell). \(\mathbb E[x_{t-1}\mid x_t,x_0]\) is a single <em>number</em>:
+the <em>mean of that bell</em> — i.e. "average \(x_{t-1}\) over the distribution ①," which by definition is its center \(\tilde\mu_t(x_t,x_0)\).
+So the inner \(\mathbb E\) is computed <em>using</em> ①; it just extracts where ① is centered. One is the bell, the other is the bell's center.</p>
+<p><strong>That's the punchline: ②'s center = \(\tilde\mu_t(x_t,\hat x_0)\) = our model's center \(\mu_\theta\).</strong> So the \(\mu\) we plug into
+the sampler doesn't just center <em>some</em> Gaussian — it lands <em>exactly</em> on the center of the true reverse step we wanted. \(p_\theta\)
+is aimed correctly.</p>
+
+<p><strong>Spread of ② — law of total variance.</strong> Its spread is \(\operatorname{Var}(x_{t-1}\mid x_t)\) (again because ② <em>is</em>
+\(q(x_{t-1}\mid x_t)\)). The same two layers, for variance, <em>add</em> instead of collapse:</p>
+<div class="eq">$$\underbrace{\operatorname{Var}(x_{t-1}\mid x_t)}_{\text{spread of ②}}=\underbrace{\mathbb E_{x_0\mid x_t}\!\big[\operatorname{Var}(x_{t-1}\mid x_t,x_0)\big]}_{=\ \tilde\beta_t\ \text{(each bell's own width)}}+\underbrace{\operatorname{Var}_{x_0\mid x_t}\!\big(\tilde\mu_t(x_t,x_0)\big)}_{=\ b^2\operatorname{Var}(x_0\mid x_t)\ \text{(centers scatter)}}.$$</div>
+
+<div class="box key">
+<span class="tag">Where those two terms come from — the derivation</span>
+<p><strong>\(x_t\) is fixed throughout this whole derivation</strong> (we're computing one step, at one \(x_t\)), so to keep the algebra readable
+we write the bell center \(\tilde\mu_t(x_t,x_0)\) as just \(\mu(x_0)\) — the \(x_t\) is still there, only suppressed. With that, two shorthands (per
+coordinate): the <em>bell you landed in</em> has center \(\mu(x_0):=\mathbb E[x_{t-1}\mid x_t,x_0]=\tilde\mu_t(x_t,x_0)\) and width
+\(\operatorname{Var}(x_{t-1}\mid x_t,x_0)=\tilde\beta_t\); the <em>whole pile</em> has center \(m:=\mathbb E[x_{t-1}\mid x_t]\) — this expectation is taken <strong>under ② itself</strong>, i.e. under
+\(q(x_{t-1}\mid x_t)\), since \(m\) is just ②'s mean (the true reverse, not the model \(p_\theta\)). Variance is average squared distance from \(m\):</p>
+<div class="eq">$$\operatorname{Var}(x_{t-1}\mid x_t)=\mathbb E\big[(x_{t-1}-m)^2\mid x_t\big].$$</div>
+<p><strong>The one trick:</strong> split the gap through the bell's own center \(\mu(x_0)\) — add and subtract it:</p>
+<div class="eq">$$x_{t-1}-m=\underbrace{(x_{t-1}-\mu(x_0))}_{\text{how far from your bell's center}}+\underbrace{(\mu(x_0)-m)}_{\text{how far that bell's center is from the pile's}}.$$</div>
+<p>Square it — three pieces — and average, doing the inner \(x_0\)‑fixed average first (tower rule):</p>
+<div class="eq">$$\mathbb E\big[(x_{t-1}-m)^2\big]=\underbrace{\mathbb E\big[(x_{t-1}-\mu(x_0))^2\big]}_{\text{(I)}}+\underbrace{2\,\mathbb E\big[(x_{t-1}-\mu(x_0))(\mu(x_0)-m)\big]}_{\text{(II) cross term}}+\underbrace{\mathbb E\big[(\mu(x_0)-m)^2\big]}_{\text{(III)}}.$$</div>
+<ul>
+  <li><strong>(I) → the within term.</strong> Fix \(x_0\): \(\mathbb E[(x_{t-1}-\mu(x_0))^2\mid x_t,x_0]\) is exactly one bell's variance
+      \(\tilde\beta_t\). Averaging a constant over \(x_0\) leaves \(\tilde\beta_t\).</li>
+  <li><strong>(II) → 0.</strong> This is the important one, and it is <em>not</em> \(\mathbb E[AB]=\mathbb E[A]\,\mathbb E[B]\) (that needs
+      independence, which we don't have). It's the tower rule. See below the list for the full statement and application.</li>
+  <li><strong>(III) → the between term.</strong> \(\mu(x_0)\) is a function of the random \(x_0\); its average over \(x_0\) is exactly \(m\)
+      (shown just below), so \(\mathbb E[(\mu(x_0)-m)^2]\) is — by the very definition of variance — \(\operatorname{Var}_{x_0\mid x_t}(\mu(x_0))\),
+      the scatter of the bell centers.</li>
+</ul>
+
+<p><strong>Why \(\mathbb E[\mu(x_0)]=m\) (needed for (III)).</strong> "Average of the bell centers = the overall center" is the tower rule once
+more — \(\mu(x_0)\) is itself an inner expectation, so averaging it over \(x_0\) rebuilds the plain mean:</p>
+<div class="eq">$$\mathbb E_{x_0\mid x_t}\big[\mu(x_0)\big]=\mathbb E_{x_0\mid x_t}\big[\ \mathbb E[x_{t-1}\mid x_t,x_0]\ \big]\overset{\text{tower}}{=}\mathbb E[x_{t-1}\mid x_t]=m.$$</div>
+<p>That's what lets us write (III) as a genuine variance: \(\operatorname{Var}(\mu(x_0))=\mathbb E[(\mu(x_0)-\mathbb E[\mu(x_0)])^2]=\mathbb E[(\mu(x_0)-m)^2]\),
+since \(\mathbb E[\mu(x_0)]=m\). (Same identity we used for ②'s mean earlier — the centers average back to \(m\).)</p>
+
+<p><strong>Term (II) in full — the tower rule, stated then used.</strong> First the rule itself (law of iterated expectations): for any two
+random variables and any function \(g\), you may average in two stages — inner average with \(Y\) fixed, then outer average over \(Y\):</p>
+<div class="eq">$$\boxed{\ \mathbb E[\,g(X,Y)\,]=\mathbb E_{Y}\big[\ \mathbb E[\,g(X,Y)\mid Y\,]\ \big]\ }$$</div>
+<p>Here \(X=x_{t-1}\), \(Y=x_0\) (everything conditioned on \(x_t\)), and \(g=(x_{t-1}-\mu(x_0))(\mu(x_0)-m)\). Apply the rule — condition on \(x_0\) inside:</p>
+<div class="eq">$$\mathbb E\big[(x_{t-1}-\mu(x_0))(\mu(x_0)-m)\big]=\mathbb E_{x_0}\Big[\ \mathbb E\big[(x_{t-1}-\mu(x_0))(\mu(x_0)-m)\ \big|\ x_t,x_0\big]\ \Big].$$</div>
+<p>Now work on the <em>inner</em> expectation, where \(x_0\) is held fixed. There \((\mu(x_0)-m)\) is a constant, so it pulls out (constant factor
+leaving an expectation — plain linearity, <em>not</em> independence):</p>
+<div class="eq">$$\mathbb E\big[(x_{t-1}-\mu(x_0))(\mu(x_0)-m)\mid x_t,x_0\big]=(\mu(x_0)-m)\cdot\mathbb E\big[x_{t-1}-\mu(x_0)\mid x_t,x_0\big].$$</div>
+<p>And that last expectation is \(0\), because \(\mu(x_0)=\mathbb E[x_{t-1}\mid x_t,x_0]\) is <em>by definition</em> the mean of \(x_{t-1}\) in that bell:
+\(\mathbb E[x_{t-1}\mid x_t,x_0]-\mu(x_0)=0\). Feeding \(0\) back to the outer average kills the whole term:</p>
+<div class="eq">$$\mathbb E\big[(x_{t-1}-\mu(x_0))(\mu(x_0)-m)\big]=\mathbb E_{x_0}\big[(\mu(x_0)-m)\cdot 0\big]=0.$$</div>
+<p>So (II) vanishes by <em>conditioning</em>, not by factoring a product — which is exactly why (I) and (III) add with no overlap.</p>
+
+<p>Put the survivors back together:</p>
+<div class="eq">$$\operatorname{Var}(x_{t-1}\mid x_t)=\underbrace{\tilde\beta_t}_{\text{(I) within}}+\underbrace{\operatorname{Var}_{x_0\mid x_t}\!\big(\tilde\mu_t(x_t,x_0)\big)}_{\text{(III) between}}.$$</div>
+<p>Finally the between term simplifies: \(\tilde\mu_t=b\,x_0+a(x_t)\) is affine, and adding the constant \(a(x_t)\) doesn't change variance, so
+\(\operatorname{Var}(b\,x_0+a)=b^2\operatorname{Var}(x_0\mid x_t)\). That's the \(b^2\operatorname{Var}(x_0\mid x_t)\) in the boxed line above.</p>
+
+<p><strong>What are \(b^2\) and \(\operatorname{Var}(x_0\mid x_t)\)?</strong></p>
+<ul>
+  <li><strong>\(b\)</strong> is the slope of the bell center in \(x_0\): from C2, \(b=\dfrac{\sqrt{\bar\alpha_{t-1}}\,\beta_t}{1-\bar\alpha_t}\).
+      It's "how far the center \(\tilde\mu_t\) moves when \(x_0\) moves." Scaling a random variable by \(b\) scales its variance by \(b^2\) — that's
+      where the square comes from.</li>
+  <li><strong>\(\operatorname{Var}(x_0\mid x_t)\)</strong> is the spread of the <em>clean image given the noisy one</em> — the posterior
+      \(q(x_0\mid x_t)\). It measures how uncertain you still are about the true \(x_0\) after seeing \(x_t\): tiny at low noise (\(x_t\) nearly
+      pins \(x_0\)), large at high noise (many clean images could explain \(x_t\)).</li>
+</ul>
+<p>So the between term = (how much \(x_0\) moves the center)\(^2\) × (how uncertain \(x_0\) is) — both factors shrink toward fine, low‑noise steps.</p>
+
+<div class="box warn">
+<span class="tag">So what happened to the second term in \(p_\theta\)?</span>
+<p>Nothing cancelled it — <strong>we drop it on purpose.</strong> \(p_\theta\)'s variance is a <em>modeling choice</em>, and DDPM sets it to the
+first term only:</p>
+<div class="eq">$$\operatorname{Var}(x_{t-1}\mid x_t)=\underbrace{\tilde\beta_t}_{p_\theta\ \text{keeps this}}+\underbrace{b^2\operatorname{Var}(x_0\mid x_t)}_{p_\theta\ \text{ignores this}}.$$</div>
+<p>So \(p_\theta\) is <em>deliberately a little too narrow</em> — it under‑covers ②'s true spread by exactly \(b^2\operatorname{Var}(x_0\mid x_t)\).
+This is the <strong>one place ③ ≠ ②</strong> (the mean matched exactly; the variance is slightly short).</p>
+<p><strong>Why give it up — is it just hard to compute?</strong> Two reasons, and the first is basically "yes, hard":</p>
+<ul>
+  <li><strong>It's intractable, and the net doesn't even give it to you.</strong> \(\operatorname{Var}(x_0\mid x_t)\) is the spread of all clean
+      images consistent with \(x_t\) — a property of the true data distribution, no closed form (the same wall that makes ② intractable). And an
+      MSE‑trained network outputs only the <em>mean</em> \(\hat x_0\), <em>not</em> its uncertainty. A plain regressor gives a point, not a spread —
+      so the very quantity you'd need isn't available from the model as trained.</li>
+  <li><strong>It's small, so it isn't worth the trouble.</strong> At fine steps \(x_t\) nearly pins down \(x_0\), so
+      \(\operatorname{Var}(x_0\mid x_t)\approx 0\). Fixing the variance to \(\tilde\beta_t\) is simpler and more stable than predicting one, and the
+      error is tiny.</li>
+</ul>
+<p>It's <em>not</em> impossible, though: Improved‑DDPM adds a second output head that <em>predicts</em> the variance (an interpolation between the
+bounds \(\tilde\beta_t\) and \(\beta_t\)), recovering most of that term and improving likelihood. So — exact is intractable and absent from the net;
+fixed‑to‑\(\tilde\beta_t\) is simple and good enough; learned is a modest upgrade later.</p>
+</div>
+</div>
+
+<p><strong>Why two terms that <em>add</em> (unlike the mean)?</strong> Because the pile‑up gets its spread from <em>two independent sources</em>,
+and spreads from independent sources stack:</p>
+<ul>
+  <li><strong>Within each bell:</strong> even if <em>all</em> bells were centered at the same spot, each one still has its own width
+      \(\tilde\beta_t\). That alone gives the pile a spread of \(\tilde\beta_t\).</li>
+  <li><strong>Between the bells:</strong> the bells are <em>not</em> centered at the same spot — different \(x_0\) puts the center at a different
+      place \(\tilde\mu_t(x_t,x_0)\). That scatter of centers spreads the pile out <em>further</em>, by \(b^2\operatorname{Var}(x_0\mid x_t)\).</li>
+</ul>
+<p>Total spread = within + between. Contrast with the <em>mean</em>: the balance point of the pile only cares <em>where</em> the centers sit on
+average — a single average, one term. Spread cares about <em>both</em> how fat each bell is <em>and</em> how far apart the bells are — two terms.</p>
+<div class="box" style="background:var(--panel2);border-left-color:var(--muted)">
+<p style="margin:0"><strong>Concrete:</strong> mix two bells, \(\mathcal N(0,1)\) and \(\mathcal N(10,1)\), 50/50. Each bell's width is just \(1\), but the
+mixture obviously sprawls from \(\sim0\) to \(\sim10\). Total variance \(=\underbrace{1}_{\text{within}}+\underbrace{\operatorname{Var}\{0,10\}}_{=\,25\ \text{between}}=26\)
+— far bigger than either bell. The mean, meanwhile, is just \(\tfrac{0+10}{2}=5\). That gap is exactly the "centers scatter" term.</p>
+</div>
+<p class="hint">For us the "between" term \(b^2\operatorname{Var}(x_0\mid x_t)\) is small — chiefly because <strong>at fine steps the coefficient \(b\to0\)</strong>
+(a tiny step barely moves the landing point as \(x_0\) varies), and additionally because at low noise \(x_0\) is itself well‑determined. Either way the
+centers barely scatter and the pile is essentially one bell of width \(\tilde\beta_t\). That's why \(p_\theta\) (which uses only \(\tilde\beta_t\)) is a
+good match, and why the mean — which never depended on that term — is matched <em>exactly</em>. Net effect: \(p_\theta\) matches ②'s mean
+<em>exactly</em> and its variance <em>almost</em> exactly.</p>
+
+<p><strong>You wanted ②; you got a Gaussian centered exactly on ②, built entirely from a network that never sees \(x_0\).</strong></p>
+<p style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px"><strong>So what do we actually "have" now?</strong> A concrete, computable distribution for the reverse step:</p>
+<div class="eq">$$p_\theta(x_{t-1}\mid x_t)=\mathcal N\big(\underbrace{\tilde\mu_t(x_t,\hat x_0)}_{\mu:\ \text{net gives this}},\ \underbrace{\tilde\beta_t}_{\sigma^2:\ \text{schedule gives this}}\,I\big)\ \approx\ q(x_{t-1}\mid x_t)=②.$$</div>
+<p>That's the whole answer to "how do we get \(p(x_{t-1}\mid x_t)\)": you don't store the intractable ② — you get a Gaussian whose <em>center</em>
+comes from the network (\(\mu\)) and whose <em>width</em> comes from the schedule (\(\sigma\)), and it hugs ②. To <strong>generate</strong>, you now just
+<strong>draw one sample from this Gaussian</strong> — and that single mechanical act is the "\(\mu+\sigma z\)" you keep seeing. Section F makes that explicit.</p>
+</div>
+
+<div class="box key">
+<span class="tag">Deep dive — the two independent proofs that the mixture collapses (the detail behind §D)</span>
+<p>§D stated the collapse and gave the one‑paragraph reason (scatter \(\ll\) width). Here are the two full derivations it pointed to: <strong>View 1</strong> reaches the Gaussian from Bayes (a razor‑thin likelihood times the prior); <strong>View 2</strong> reaches it from the mixture (the coefficient \(b\)). They are the same fact, proved from opposite ends.</p>
+
+<p><strong>View 1 — Bayes with a razor‑thin likelihood.</strong> We'll build this in five steps, in order: set up the question, get the two ingredients,
+combine them, watch it become a bell, then confirm with algebra and say when it's exact.</p>
+
+<p><strong>Step 1 — the question and the tool.</strong> We're at a fixed noisy image \(x_t\) and want the distribution over the cleaner image it came from,
+\(q(x_{t-1}\mid x_t)\). Bayes rewrites it as two things we <em>can</em> reason about:</p>
+<div class="eq">$$q(x_{t-1}\mid x_t)\ \propto\ \underbrace{q(x_t\mid x_{t-1})}_{\text{likelihood}}\ \cdot\ \underbrace{q(x_{t-1})}_{\text{prior}}.$$</div>
+<p><strong>The whole confusion is "what's fixed."</strong> \(x_t\) is <em>fixed</em> — it's the one noisy image in your hand, a constant. \(x_{t-1}\) is the
+<em>unknown</em>: we test every candidate value \(y\) for it. So both factors above are read as <strong>functions of the candidate \(y\)</strong>, with \(x_t\)
+frozen. The answer \(q(x_{t-1}\mid x_t)\) is a <em>curve over candidates</em> — one height per \(y\).</p>
+
+<p><strong>Step 2 — ingredient one: the likelihood is a single narrow bump.</strong> \(q(x_t\mid x_{t-1})\) is a Gaussian — but Gaussian <em>in which
+variable?</em> With \(x_t\) frozen and \(y=x_{t-1}\) the variable:</p>
+<div class="eq">$$L(y):=q(x_t\mid x_{t-1}{=}y)\ \propto\ \exp\!\Big(-\frac{(y-m)^2}{2s^2}\Big),\qquad m=\frac{x_t}{\sqrt{\alpha_t}},\quad s=\sqrt{\beta_t}.$$</div>
+<p>It's <strong>one</strong> bump over candidates, centered at \(m=x_t/\sqrt{\alpha_t}\), width \(s=\sqrt{\beta_t}\). It answers: "for the \(x_t\) I'm holding,
+which candidate \(y\) most plausibly noised into it?" A small step (\(\beta_t\) tiny) makes it <strong>razor‑thin</strong> — near zero except in a
+\(\pm\sqrt{\beta_t}\) sliver around \(m\). <em>(Careful: if instead you froze \(x_{t-1}\) and varied \(x_t\) you'd get a different Gaussian for each
+\(x_{t-1}\) — the forward reading. The reverse freezes \(x_t\), so it's a single bump. Same formula, opposite slot held fixed.)</em></p>
+
+<p><strong>Step 3 — ingredient two: the prior, and how they combine (pointwise).</strong> \(P(y):=q(x_{t-1}{=}y)\) is the messy data density over candidates.
+The posterior is the two curves multiplied <strong>height‑by‑height</strong>: at each candidate \(y\), \(f(y)=L(y)\,P(y)\). No multiplication <em>across</em>
+candidates — each \(y\) is scored on its own, and the scores are the curve. Concretely, hold \(x_t{=}5\) so \(L\) bumps at 5; take a gently rising prior:</p>
+<div style="overflow-x:auto">
+<table>
+<tr><th>candidate \(y=x_{t-1}\)</th><td>4.0</td><td>4.5</td><td><strong>5.0</strong></td><td>5.5</td><td>6.0</td></tr>
+<tr><th>\(L(y)\) — explains the 5?</th><td>0.0003</td><td>0.135</td><td><strong>1.00</strong></td><td>0.135</td><td>0.0003</td></tr>
+<tr><th>\(P(y)\) — plausible?</th><td>1.20</td><td>1.25</td><td>1.30</td><td>1.35</td><td>1.40</td></tr>
+<tr><th>score \(f=L\cdot P\)</th><td>~0</td><td>0.17</td><td><strong>1.30</strong></td><td>0.18</td><td>~0</td></tr>
+</table>
+</div>
+<p>The score row \(\sim0,\,0.17,\,1.30,\,0.18,\,\sim0\) <strong>is a bell</strong> near 5 — that curve is \(q(x_{t-1}\mid x_t{=}5)\). Notice: \(x_t{=}5\) is the
+same in every column; only the candidate \(y\) changes; and the multiply is once per column. (Hold \(x_t{=}8\) instead → the same sweep gives a bell near
+8. <em>One bell per \(x_t\)</em> — that's what "the reverse is Gaussian" means.)</p>
+
+<p><strong>Step 4 — why the product is a bell: the spotlight.</strong> \(L\) is a razor‑thin <em>flashlight beam</em> aimed at \(m\); \(f=L\cdot P\) is "the prior,
+but only where the beam shines." Through a tiny beam you see only a tiny patch of the prior — and <strong>a tiny patch of any smooth curve is just a straight
+ramp</strong> (constant + slight tilt). Bell \(\times\) constant \(=\) same bell; bell \(\times\) gentle tilt \(=\) same bell, shifted a hair. Either way,
+<em>one bump</em>. The prior can't add a second bump, because everywhere it might want one (far from \(m\)) the beam has already set \(f\approx0\).
+That's why even a <strong>bimodal</strong> prior (mass at 0 and 10) gives a clean Gaussian: a thin beam at \(m{=}3\) never reaches the modes — they're
+invisible. (Only a <em>wide</em> beam — a big step — straddles both and comes out non‑Gaussian. Hence small steps stay Gaussian, big jumps don't.)</p>
+
+<p><strong>Step 5 — the algebra confirms it, line by line.</strong> Over the sliver, Taylor‑expand the log‑prior to first order:
+\(\log P(y)\approx \text{const}+g\,(y-m)\), with \(g=\tfrac{d}{dy}\log P|_m\) the <em>score</em>. Now multiply the two factors and simplify — nothing skipped.</p>
+<p><strong>(a) Multiply, using \(e^A e^B=e^{A+B}\).</strong> The prior's constant just rescales, so fold it into "\(\text{const}\)":</p>
+<div class="eq">$$q(x_{t-1}\mid x_t)\ \propto\ \underbrace{e^{-\frac{(y-m)^2}{2s^2}}}_{L(y)}\cdot\underbrace{e^{\,g(y-m)}}_{P(y)\text{ over sliver}}=\exp\!\Big(\underbrace{-\frac{(y-m)^2}{2s^2}+g(y-m)}_{\text{call this }E}\Big).$$</div>
+<p><strong>(b) Substitute \(u=y-m\)</strong> to declutter, and factor \(-\tfrac{1}{2s^2}\) out of the exponent \(E\):</p>
+<div class="eq">$$E=-\frac{u^2}{2s^2}+g\,u=-\frac{1}{2s^2}\big(u^2-2s^2 g\,u\big).$$</div>
+<p class="hint">Check the factor: \(-\tfrac{1}{2s^2}\cdot u^2=-\tfrac{u^2}{2s^2}\) ✓, and \(-\tfrac{1}{2s^2}\cdot(-2s^2 g\,u)=g\,u\) ✓.</p>
+<p><strong>(c) Complete the square inside the parentheses</strong> using \(u^2-2au=(u-a)^2-a^2\) with \(a=s^2g\):</p>
+<div class="eq">$$u^2-2s^2 g\,u=(u-s^2 g)^2-(s^2 g)^2.$$</div>
+<p><strong>(d) Put it back.</strong> The \(-(s^2g)^2\) piece has no \(u\) — it's a constant, so it joins "\(\text{const}\)":</p>
+<div class="eq">$$E=-\frac{1}{2s^2}\Big[(u-s^2 g)^2-(s^2g)^2\Big]=-\frac{(u-s^2 g)^2}{2s^2}+\underbrace{\frac{(s^2g)^2}{2s^2}}_{\text{const}}.$$</div>
+<p><strong>(e) Undo \(u=y-m\)</strong> and exponentiate — the constant becomes an overall scale (absorbed by normalization):</p>
+<div class="eq">$$q(x_{t-1}\mid x_t)\ \propto\ \exp\!\Big(-\frac{\big(y-(m+s^2 g)\big)^2}{2s^2}\Big)=\mathcal N\big(\underbrace{m}_{\text{denoise}}+\underbrace{s^2 g}_{\text{score nudge}},\ \ s^2\big).$$</div>
+<p>It's a perfect square in \(y\) → still Gaussian, just <em>re‑centered</em> from \(m\) to \(m+s^2g\), same width \(s=\sqrt{\beta_t}\). Read the answer:
+center \(m=x_t/\sqrt{\alpha_t}\) undoes the scaling (denoise); \(+s^2g=+\beta_t\cdot\text{score}\) leans toward denser regions.
+<strong>This is literally "reverse mean = denoise \(+\) a score correction,"</strong> and it fell straight out of "narrow bump \(\times\) exp(linear)."</p>
+
+<p><strong>When is it <em>exact</em>? — the leftover.</strong> The one thing we dropped is the prior's <em>curvature</em> (the quadratic Taylor term). On the
+natural window \(y-m\sim\sqrt{\beta_t}\) the exponent's terms rank by size:</p>
+<div class="eq">$$\underbrace{-\frac{(y-m)^2}{2\beta_t}}_{O(1)\,:\ \text{sets the bell}}\ \gg\ \underbrace{g(y-m)}_{O(\sqrt{\beta_t})\,:\ \text{score, keeps mean right}}\ \gg\ \underbrace{\tfrac12 g'(y-m)^2}_{O(\beta_t)\,:\ \text{curvature, would bend it}}.$$</div>
+<p>Both the score and the curvature vanish as \(\beta_t\to0\), but the curvature is <strong>one order smaller</strong> — so we keep the score and drop the
+curvature not because it's "small" but because it's <em>higher order</em>. (And we keep the small score because, summed over the \(\sim1/\beta_t\) steps,
+its per‑step nudge \(\beta_t g\) accumulates to \(O(1)\) — it's what carries you from noise to data; the curvature error summed the same way still \(\to0\).)
+Hence: <strong>the reverse step is Gaussian to leading order, and exactly Gaussian as \(\beta_t\to0\).</strong></p>
+
+<p><strong>View 2 — the mixture, via the coefficient \(b\).</strong> ② is the pile of bells centered at \(\tilde\mu_t=b\,x_0+a(x_t)\); it's non‑Gaussian
+only because those centers scatter as \(x_0\) varies, by \(b\times(\text{spread of }x_0)\). What kills the scatter in a small step is <strong>\(b\to0\)</strong>:</p>
+<div class="eq">$$b=\frac{\sqrt{\bar\alpha_{t-1}}\,\beta_t}{1-\bar\alpha_t}\ \xrightarrow[\ \beta_t\to0\ ]{}\ 0,\qquad\text{so between‑scatter}=b^2\operatorname{Var}(x_0\mid x_t)\to0.$$</div>
+<p><strong>But \(b\to0\) alone isn't the argument — <em>compared to what?</em></strong> A pile of bells is <em>one</em> bell only if the centers are packed tighter than a single bell is <em>wide</em>. Line up the two lengths:</p>
+<div class="eq">$$\underbrace{\text{width of one bell}=\sqrt{\tilde\beta_t}=O(\sqrt{\beta_t})}_{\text{how fat each ① is}}\qquad\text{vs.}\qquad\underbrace{\text{scatter of centers}=b\times(\text{spread of }x_0)=O(\beta_t)}_{\text{how far the ①'s drift apart}}.$$</div>
+<p>Their ratio \(\dfrac{\text{scatter}}{\text{width}}=O(\sqrt{\beta_t})\to0\): the centers pack together <em>faster</em> than the bells narrow, so the bells overlap ever more and the pile collapses onto <strong>one</strong> bell. Equivalently, ② is a narrow center‑cloud (width \(\sim\beta_t\)) <em>convolved</em> with a much wider Gaussian blur (width \(\sim\sqrt{\beta_t}\)) — and smearing <em>any</em> shape by a Gaussian far wider than itself yields a Gaussian, however ugly the \(x_0\) posterior was. <em>That</em> is the "why Gaussian," not merely \(b\to0\).</p>
+<p class="hint"><strong>Correction to keep honest:</strong> it is <em>not</em> that \(\operatorname{Var}(x_0\mid x_t)\to0\) — the uncertainty about the clean
+image depends on the <em>absolute</em> noise level, and at high noise it stays large no matter how small the step. What vanishes is \(b\): a tiny step
+barely moves the landing point as \(x_0\) changes, so all the bells pile at nearly the same place even though \(x_0\) is still very uncertain.</p>
+<p>Both views are the same sentence: <strong>one infinitesimal step can't reveal much about which clean image you're heading toward, so the reverse
+step can't split into modes — it stays a single Gaussian.</strong></p>
+
+<p><strong>Why big steps break it.</strong> Jump far (\(\bar\alpha_t\to\bar\alpha_s\), \(s\ll t\)) and \(b\) is \(O(1)\): different \(x_0\)'s send
+\(x_{t-1}\) to genuinely different places, so ② spreads and can go multimodal — not Gaussian. The extreme case: "reverse" straight from pure noise to
+data <em>is</em> the whole multimodal data distribution. That's why DDPM needs many small steps — and why DDIM's big jumps <em>cannot</em> use this
+Gaussian argument; they rely on the exact marginal‑matching argument in §2 instead.</p>
+</div>
+
+<h4>F. Sampling — the ancestral loop, step by step (this is inference)</h4>
+<p>Now \(x_0\) is unknown — it's what we're generating. Here is exactly where the estimate enters: we compute the posterior mean \(\tilde\mu_t\), but with the network's reconstructed \(\hat x_0\) in place of the \(x_0\) we don't have.</p>
+<div class="box repo" style="border-left:3px solid var(--accent)">
+<span class="tag">The sampler, in full</span>
+<ol>
+  <li><strong>Start:</strong> \(x_T\sim\mathcal N(0,I)\).</li>
+  <li><strong>For \(t=T,\dots,1\):</strong>
+    <ul>
+      <li>predict noise \(\hat\varepsilon=\varepsilon_\theta(x_t,t)\);</li>
+      <li>reconstruct clean image \(\hat x_0=\dfrac{x_t-\sqrt{1-\bar\alpha_t}\,\hat\varepsilon}{\sqrt{\bar\alpha_t}}\), then <strong>clamp to \([-1,1]\)</strong> (the scar below);</li>
+      <li>form the posterior mean with the estimate: \(\mu=\tilde\mu_t(x_t,\hat x_0)\);</li>
+      <li>draw \(z\sim\mathcal N(0,I)\) if \(t>1\), else \(z=0\), and step: \(x_{t-1}=\mu+\sigma_t\,z\), with \(\sigma_t=\sqrt{\tilde\beta_t}\).</li>
+    </ul>
+  </li>
+  <li><strong>Return</strong> \(x_0\).</li>
+</ol>
+</div>
+
+<div class="box pink">
+<span class="tag">Why the sampler does each thing — especially the added noise</span>
+<p><strong>Why we estimate \(\mu\) at all.</strong> The reverse step we <em>want</em> is \(p_\theta(x_{t-1}\mid x_t)=\mathcal N(\mu,\sigma_t^2 I)\).
+Its center \(\mu\) is the exact posterior mean \(\tilde\mu_t(x_t,x_0)\) from C2 — but that formula needs \(x_0\), which we're still generating.
+So we substitute the net's reconstruction: run \(\varepsilon_\theta\), back out \(\hat x_0\), and plug it in. \(\mu\) is now our best guess for
+"where the slightly‑cleaner image sits."</p>
+<p><strong>Why we don't just output \(\mu\).</strong> \(\mu\) is only the <em>center</em> of a distribution, not the answer.
+Many different \(x_{t-1}\) could have produced this \(x_t\); \(\mu\) is their average. If you always took the average you'd blend all those
+possibilities together every step and drift into a blurry, washed‑out image (the mean of the data, not a sample <em>from</em> it).</p>
+<p><strong>Why the added \(\sigma_t z\) — and why it <em>is</em> in the equations.</strong> The \(z\) is not invented on the side; it's the
+<em>second half of the distribution the equations already gave us</em>. Recall the reverse step is a full Gaussian, with <em>both</em> a
+center and a width — and both came out of C2's closed‑form posterior:</p>
+<div class="eq">$$p_\theta(x_{t-1}\mid x_t)=\mathcal N\big(\underbrace{\tilde\mu_t(x_t,\hat x_0)}_{\mu\ \text{— from C4}},\ \underbrace{\tilde\beta_t}_{\sigma_t^2\ \text{— from C2}}\,I\big).$$</div>
+<p><strong>Where does that variance come from?</strong> Straight from §E — no repeat of the derivation here: we <em>fix</em> \(\sigma_t^2=\tilde\beta_t\) (①'s closed‑form width), which is ②'s variance minus the higher‑order scatter term §E dropped. Not learned, not tuned. (Improved‑DDPM later <em>learns</em> a blend of DDPM's two brackets \(\tilde\beta_t\) and \(\beta_t\); vanilla just fixes \(\tilde\beta_t\).)</p>
+<p>Now, to <strong>generate</strong> we need a <em>sample</em> from this Gaussian, not its center \(\mu\). And drawing from <em>any</em> Gaussian has one
+universal form — start from a plain unit bell \(z\sim\mathcal N(0,I)\), scale by the width, shift by the center:</p>
+<div class="eq">$$x\sim\mathcal N(\mu,\sigma_t^2 I)\ \Longleftrightarrow\ x=\mu+\sigma_t\,z,\quad z\sim\mathcal N(0,I).$$</div>
+<p>So \(\mu+\sigma_t z\) is <strong>not an extra step bolted on</strong> — it is literally "evaluate the two numbers the equations give
+(\(\mu=\tilde\mu_t\), \(\sigma_t=\sqrt{\tilde\beta_t}\)), then take one draw from that Gaussian." Drop the \(z\) and you'd be outputting the
+<em>mean</em> of \(p_\theta\), not a <em>sample from</em> it. The loop repeats this draw down to \(t=1\).</p>
+<p>So the two pieces have clean jobs: \(\mu\) says <em>where</em> the next image most likely sits; \(\sigma_t z\) is the honest jitter for
+"I don't know exactly which \(x_{t-1}\) produced this \(x_t\) — here's a random plausible one." Injected fresh each step, that jitter keeps the
+trajectory exploring and lets the chain reproduce the full variety of the data instead of collapsing to one blurry average. This is why DDPM
+is a <em>stochastic</em> sampler — and why changing the seed changes the image.</p>
+<p><strong>Why \(z=0\) on the last step (\(t=1\)).</strong> The final output is your clean image; you want its best estimate, not a re‑noised
+version of it. Adding noise at \(t=1\) would just dirty the answer you're about to return, so the last step takes the mean only.</p>
+<p class="hint">DDIM's move (§2) is now one sentence: keep \(\mu\) exactly as above, but set \(\sigma_t=0\) on <em>every</em> step — drop the jitter
+entirely. Same \(\mu\), zero noise, deterministic result.</p>
+</div>
+
+<div class="box key">
+<span class="tag">One‑line bridge to §2</span>
+<p><strong>DDPM vs DDIM, without jargon:</strong> both feed the <em>same</em> \(\hat x_0\) into the <em>same</em> posterior ①. They differ only in how
+much fresh noise \(\sigma_t\) they add back on the step — DDPM adds \(\sqrt{\tilde\beta_t}\) (stochastic), DDIM adds \(0\) (deterministic).
+Same estimate, same target, one different knob. §2 derives why that knob is free to turn.</p>
+</div>
+
+<div class="box repo">
+<span class="tag">In this repo</span>
+<p>Forward + loss: <code>core/gaussian_diffusion.py</code> (<code>q_sample</code>, <code>training_loss</code>). Sampler:
+<code>core/samplers/ddpm.py</code>. Schedule: <code>core/schedule.py</code> (<code>linear</code> | <code>cosine</code>).</p>
+</div>
+<div class="box warn">
+<span class="tag">The scar worth knowing</span>
+<p>At the top timesteps \(1/\sqrt{\bar\alpha_t}\) is enormous, so a tiny \(\varepsilon\) error throws \(x_0\) far outside
+\([-1,1]\) and the chain diverges into noise. The fix — <strong>clamp the predicted \(x_0\) to \([-1,1]\) every step</strong>
+(<code>clip_denoised</code>) — moved sample MSE from 0.61 → 0.043 in this repo. It's in both the DDPM and DDIM samplers.</p>
+</div>
+
+<!-- ============================================================ 2 -->
+<h2 id="ddim"><span class="n">2</span>DDIM — <em>why is it valid?</em></h2>
+<p>DDPM samples by crawling \(\sim\!1000\) <em>stochastic</em> steps. DDIM keeps the <strong>same trained network</strong> but samples
+<strong>deterministically</strong> (same seed → same image) in <strong>20–50 steps</strong> — no retraining. Two changes, one question:
+<em>why is that allowed?</em> The answer is a single lever, then a short derivation.</p>
+
+<div class="box pink">
+<span class="tag">DDIM in plain words (read before the derivation)</span>
+<p><strong>The idea: move all the randomness to the very first step.</strong></p>
+<ul>
+  <li><strong>DDPM</strong> rolls dice at <em>every</em> step — fresh \(\sigma z\) each time. The final image is random because of all those little
+      injections along the way.</li>
+  <li><strong>DDIM</strong> rolls dice <em>once</em>, at the start (\(x_T\sim\mathcal N(0,I)\)), then follows a <strong>fixed deterministic recipe</strong>
+      down to the image. Same \(x_T\) → same image. It's a change of variables: Gaussian noise in one end, a fixed transform, a data sample out the other.</li>
+</ul>
+<p><strong>The catch — you can't <em>just</em> delete DDPM's noise.</strong> Setting \(\sigma{=}0\) in DDPM's own step (output the mean every step) does
+<em>not</em> sample the right distribution — it biases toward blur. DDIM removes the noise <strong>and retunes the step coefficient</strong> so the
+distribution stays exactly right (that's the \(c=\sqrt{1-\bar\alpha_{t-1}-\sigma_t^2}\) in Step 2 — with \(\sigma_t{=}0\) it forces a specific \(c\) that
+compensates for the missing noise). <strong>Delete noise + retune coefficient = DDIM; delete noise alone = broken.</strong></p>
+<p><strong>Why it still lands on the real distribution:</strong> the deterministic recipe is built so that at every noise level the spread of \(x_t\) it
+produces (as \(x_T\) varies) exactly matches the correct marginal there. Per‑trajectory it's deterministic; over all \(x_T\) the outputs are distributed
+like the data. That marginal‑matching is the whole guarantee — and it's what the derivation below nails down.</p>
+</div>
+
+<div class="box key">
+<span class="tag">Roadmap — what we'll show, how, and where it clicks</span>
+<p><strong>What we'll show:</strong> the DDIM update is a legal sampler that reuses the DDPM weights unchanged — deterministic, and still correct when you skip steps.</p>
+<p><strong>How, in four moves:</strong></p>
+<ol>
+  <li><strong>The lever</strong> — the DDPM loss only pinned the marginals \(q(x_t\mid x_0)\), never how steps chain.</li>
+  <li><strong>Build the family</strong> — write <em>every</em> reverse step with a free noise knob \(\sigma_t\); force it to keep those marginals. One equation fixes everything <em>except</em> \(\sigma_t\).</li>
+  <li><strong>Pick the member</strong> — \(\sigma_t={}\)DDPM std ⟹ DDPM; \(\sigma_t{=}0\) ⟹ DDIM.</li>
+  <li><strong>Write the update</strong> — set \(\sigma_t{=}0\), plug in the net's \(\hat x_0\); notice adjacency was never used ⟹ you may skip steps.</li>
+</ol>
+<p><strong>Where it clicks:</strong> Step 2 — the instant the marginal‑matching equation leaves \(\sigma_t\) <em>free</em>. That one free parameter <strong>is</strong>
+the entire DDPM↔DDIM family: same weights, same marginals, one dial. The table below shows the single line that dial changes.</p>
+</div>
+
+<div class="box">
+<span class="tag">DDPM vs DDIM — the two loops, side by side</span>
+<p>Both share one master update (the \(\sigma_t\)-family from Step 2); only \(\sigma_t\) differs:</p>
+<div class="eq">$$x_{t-1}=\sqrt{\bar\alpha_{t-1}}\,\hat x_0+\sqrt{1-\bar\alpha_{t-1}-\sigma_t^2}\;\hat\varepsilon+\sigma_t\,z,\qquad z\sim\mathcal N(0,I).$$</div>
+<div style="overflow-x:auto">
+<table>
+<tr><th></th><th>DDPM</th><th>DDIM</th></tr>
+<tr><th>Start</th><td colspan="2" style="text-align:center">\(x_T\sim\mathcal N(0,I)\) — for DDIM this is the <em>only</em> randomness</td></tr>
+<tr><th>1. Predict noise</th><td colspan="2" style="text-align:center">\(\hat\varepsilon=\varepsilon_\theta(x_t,t)\) &nbsp;— <em>same network</em></td></tr>
+<tr><th>2. Estimate clean image</th><td colspan="2" style="text-align:center">\(\hat x_0=(x_t-\sqrt{1-\bar\alpha_t}\,\hat\varepsilon)/\sqrt{\bar\alpha_t}\) &nbsp;— <em>same formula</em></td></tr>
+<tr><th>3. The step (\(\sigma_t\))</th>
+    <td>\(\sigma_t=\sqrt{\tilde\beta_t}\) → \(x_{t-1}=\sqrt{\bar\alpha_{t-1}}\hat x_0+\sqrt{1-\bar\alpha_{t-1}-\tilde\beta_t}\,\hat\varepsilon+\sqrt{\tilde\beta_t}\,z\)</td>
+    <td>\(\sigma_t=0\) → \(x_{t-1}=\sqrt{\bar\alpha_{t-1}}\hat x_0+\sqrt{1-\bar\alpha_{t-1}}\,\hat\varepsilon\)</td></tr>
+<tr><th>Fresh noise each step?</th><td><span class="pill no">yes — \(+\sqrt{\tilde\beta_t}\,z\)</span></td><td><span class="pill ok">none</span></td></tr>
+<tr><th># steps</th><td>\(\sim\!1000\), adjacent</td><td>20–50, may skip</td></tr>
+<tr><th>Same \(x_T\) twice?</th><td>different image each run</td><td>identical image (deterministic)</td></tr>
+</table>
+</div>
+<p>Rows 1–2 are <em>byte‑for‑byte identical</em> — the shared network and the same \(\hat x_0\). The only difference is row 3 — but look closely, it is
+<strong>not just "drop the \(z\)."</strong> Two things change together, because \(\sigma_t\) appears <em>twice</em> in the master formula:</p>
+<ul style="margin:4px 0">
+  <li>the noise term \(\sigma_t z\) → \(0\) (removed);</li>
+  <li>the \(\hat\varepsilon\) coefficient <em>grows</em>: \(\sqrt{1-\bar\alpha_{t-1}-\tilde\beta_t}\ \to\ \sqrt{1-\bar\alpha_{t-1}}\).</li>
+</ul>
+<p style="margin-bottom:0">The variance the missing \(z\) would have added (\(\tilde\beta_t\)) is put <em>back</em> into the \(\hat\varepsilon\) direction, so the total stays
+\(1-\bar\alpha_{t-1}\) — the marginal is preserved. If you dropped the \(z\) but kept DDPM's coefficient, total variance would fall short and the sampler
+would be <strong>broken</strong> — neither DDPM nor DDIM. So it only <em>looks</em> like "remove the noise": one dial \(\sigma_t{\to}0\), two coupled effects.</p>
+</div>
+
+<div class="box key">
+<span class="tag">The lever — the loss only fixed the <em>marginals</em>, not the chaining</span>
+<p>The one thing we reuse from §1 is the DDPM loss and its sampling relation:</p>
+<div class="eq">$$\mathcal L=\mathbb E_{x_0,\,t,\,\varepsilon}\big[\lVert \varepsilon-\varepsilon_\theta(x_t,t)\rVert^2\big],\qquad
+x_t=\sqrt{\bar\alpha_t}\,x_0+\sqrt{1-\bar\alpha_t}\,\varepsilon.$$</div>
+<p>It touches only the <strong>marginal</strong> \(q(x_t\mid x_0)\): corrupt a clean image to <em>one</em> noise level, regress the noise. It
+<strong>never sees</strong> \(q(x_{t-1}\mid x_t)\) — it never constrains how consecutive levels are <em>chained</em>. So the network learned only
+"at level \(t\), what noise is present," and is <strong>blind to the chaining.</strong></p>
+<p><strong>Consequence.</strong> DDPM's Markov chain is just <em>one</em> chaining consistent with those marginals. <strong>Any other chaining with the
+same marginals is served by the exact same weights</strong> — for free, no retraining. DDIM is simply a different chaining with those marginals: one
+that happens to be deterministic and skippable. Everything below just constructs it.</p>
+</div>
+
+<h4>Step 1 — set up a general reverse step and count the knobs</h4>
+<p><strong>The strategy first.</strong> We don't know the formula for a good reverse step yet, so we won't guess one. Instead we write down a
+<em>general</em> reverse step with unknown knobs, then (in Step 2) impose the one requirement that makes it valid — <strong>it must reproduce the forward
+marginals \(q(x_t\mid x_0)\) the network was trained on.</strong> Whatever knobs survive that requirement are our menu of legal samplers.</p>
+<p class="hint">Analogy: to find "all right triangles with hypotenuse 5," you don't test triangles one by one — you write \(a^2+b^2=25\) (one equation, two
+unknowns) and a one‑parameter family survives: pick \(a\), and \(b\) is forced. We're about to do the same: write a general step (two unknowns), impose
+one constraint, and a one‑parameter family of samplers survives.</p>
+<p><strong>The mindset: we're <em>inventing</em> a process.</strong> We get to <em>define</em> the reverse step \(q_\sigma(x_{t-1}\mid x_t,x_0)\) however we
+like. It must obey exactly <strong>one law</strong>: the marginals it induces must equal \(q(x_t\mid x_0)=\mathcal N(\sqrt{\bar\alpha_t}x_0,(1-\bar\alpha_t)I)\)
+— the thing the network learned. Every choice below is either the most general form that <em>can</em> satisfy that law, or is already <em>forced</em> by it.</p>
+
+<p><strong>(i) We <em>choose</em> the step to be a Gaussian with a linear mean.</strong> This is the one design decision, and it has four small beats:</p>
+<ul>
+  <li><strong>We're free to choose the step's shape.</strong> Only the marginals are forced on us; the <em>shape</em> of the reverse step is ours to pick.</li>
+  <li><strong>A Gaussian is just two numbers.</strong> A general distribution is a whole curve (a height at every point — infinitely many numbers). A
+      Gaussian is pinned by only its <em>center</em> (mean) and its <em>width</em> (variance). Two numbers.</li>
+  <li><strong>So "match a whole distribution" shrinks to "match two numbers."</strong> Our step must output the correct distribution for \(x_{t-1}\).
+      If it's Gaussian, two Gaussians are identical <em>exactly when</em> their center and width agree — so the whole task becomes: match the mean
+      (one equation) and match the variance (one equation). <em>That</em> is why Steps 1–2 are just a few lines.</li>
+  <li><strong>Why the mean must be <em>linear</em>.</strong> For the output to actually come out Gaussian, the mean must be a straight‑line (linear)
+      function of the inputs — linear maps keep Gaussians Gaussian. A curvy mean could bend the output into a non‑Gaussian shape and wreck the "two
+      numbers" trick.</li>
+</ul>
+<p>So we take \(\text{mean}=A\,x_0+B\,x_t\) — the most general straight‑line function of the two things the step conditions on — with \(A,B\) two free numbers.</p>
+<p class="hint">All of this is "given \(x_0\)": we work at a fixed clean image throughout, so the data density \(q(x_0)\) (which is <em>not</em> Gaussian) never
+enters. And DDPM's true posterior (§1‑C2) already had exactly this linear‑Gaussian form — we're just keeping its coefficients free instead of fixed.</p>
+
+<p><strong>(ii) Relabel the mean using the noise coordinate \(\varepsilon\) — pure bookkeeping.</strong> It's tidier to measure the \(x_t\)‑part along the
+"noise direction." Define \(\varepsilon:=\dfrac{x_t-\sqrt{\bar\alpha_t}x_0}{\sqrt{1-\bar\alpha_t}}\), i.e. \(x_t=\sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\,\varepsilon\).
+Knowing \((x_0,x_t)\) is the same as knowing \((x_0,\varepsilon)\) — reversible. Substitute \(x_t\) into \(A x_0+B x_t\) and collect:</p>
+<div class="eq">$$A\,x_0+B\,x_t=A\,x_0+B\big(\sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\,\varepsilon\big)=\underbrace{(A+B\sqrt{\bar\alpha_t})}_{\text{call it }A'}\,x_0+\underbrace{B\sqrt{1-\bar\alpha_t}}_{\text{call it }c}\,\varepsilon.$$</div>
+<p>So the general linear mean is just \(A'x_0+c\,\varepsilon\) — still two free numbers (\(A',c\) renamed from \(A,B\)). Nothing changed but the labels.</p>
+
+<p><strong>(iii) Impose the law.</strong> Three clean parts: (A) what our step <em>is</em>, (B) which distribution the law constrains, (C) match and read off \(A'\).</p>
+
+<p><strong>A. Our step is a Gaussian = a center plus a spread.</strong> From (i)–(ii):</p>
+<div class="eq">$$q_\sigma(x_{t-1}\mid x_t,x_0)=\mathcal N\big(\underbrace{A'x_0+c\,\varepsilon}_{\text{center (mean)}},\ \underbrace{\sigma_t^2 I}_{\text{spread (variance)}}\big).$$</div>
+<ul>
+  <li><strong>Why \(A'x_0+c\varepsilon\) is the "center":</strong> it's the <em>mean</em> of the Gaussian we chose — the single most likely spot for \(x_{t-1}\).</li>
+  <li><strong>Why we "add spread" \(\sigma_t z\):</strong> a Gaussian is a cloud, not a point. To draw one sample you take center \(+\) spread\(\,\times\,\)unit noise
+      — the §1 fact "sample \(\mathcal N(\mu,\sigma^2)\) \(=\mu+\sigma z\)." So one draw of the step is \(x_{t-1}=(A'x_0+c\varepsilon)+\sigma_t z\). The \(\sigma_t z\)
+      isn't extra — it's how you realize the spread; the center alone would be just the peak, not a sample.</li>
+</ul>
+
+<p><strong>B. Go from the conditional \(x_{t-1}\mid x_t,x_0\) to the marginal \(x_{t-1}\mid x_0\) — marginalize over \(x_t\).</strong> Our step is written given
+\(x_t\), but the law we must satisfy is on the marginal given only \(x_0\). To <em>drop \(x_t\) from the conditioning</em>, average the conditional over all
+possible \(x_t\), weighted by how likely each is — that's what "marginalize" means. In one line:</p>
+<div class="eq">$$\boxed{\;q(x_{t-1}\mid x_0)=\mathbb E_{\,x_t\sim q(x_t\mid x_0)}\big[\,q(x_{t-1}\mid x_t,x_0)\,\big]=\int q(x_{t-1}\mid x_t,x_0)\,q(x_t\mid x_0)\,dx_t.\;}$$</div>
+<p>The marginal <em>is</em> the average of the conditional over \(x_t\). We don't grind the integral — everything is Gaussian, so we use a shortcut:
+<strong>\(\varepsilon\) is how we sample \(x_t\).</strong> Since \(x_t=\sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\,\varepsilon\), drawing \(\varepsilon\sim\mathcal N(0,I)\)
+<em>is</em> drawing \(x_t\sim q(x_t\mid x_0)\). So averaging over \(x_t\) = averaging over \(\varepsilon\):</p>
+<div class="eq">$$\varepsilon\ \text{fixed}\ \big(\text{one specific }x_t\big)\ \xrightarrow{\ \text{let it range}\ }\ \varepsilon\sim\mathcal N(0,I)\ \big(\text{all }x_t,\text{ weighted}\big)\ =\ \text{marginalize over }x_t.$$</div>
+<p>So the <em>only</em> change from conditional to marginal is: in the conditional \(x_t\) (hence \(\varepsilon\)) is <strong>given/fixed</strong>; in the marginal
+\(x_t\) is <strong>not given</strong>, so \(\varepsilon\) becomes <strong>random</strong>. Same draw formula \(x_{t-1}=A'x_0+c\varepsilon+\sigma_t z\), only "what's
+random" changes:</p>
+<div style="overflow-x:auto">
+<table>
+<tr><th>in \(x_{t-1}=A'x_0+c\,\varepsilon+\sigma_t z\)</th><th>conditional \(x_{t-1}\mid x_t,x_0\)</th><th>marginal \(x_{t-1}\mid x_0\)</th></tr>
+<tr><th>\(x_0\)</th><td>fixed</td><td>fixed</td></tr>
+<tr><th>\(\varepsilon\) (\(=x_t\) standardized)</th><td><strong>fixed</strong> (\(x_t\) is given)</td><td><strong>random</strong> \(\mathcal N(0,I)\) (\(x_t\) not given)</td></tr>
+<tr><th>\(z\) (step's own noise)</th><td>random \(\mathcal N(0,I)\)</td><td>random \(\mathcal N(0,I)\)</td></tr>
+<tr><th>result</th><td>\(\mathcal N(A'x_0+c\varepsilon,\ \sigma_t^2)\)</td><td>\(\mathcal N(A'x_0,\ c^2+\sigma_t^2)\)</td></tr>
+</table>
+</div>
+<p>So what turns the conditional into the marginal is <strong>letting \(\varepsilon\) go random</strong> (averaging over \(x_t\)) — <em>not</em> the \(\sigma_t z\), which is present in both.</p>
+<p class="hint"><strong>Where "input is correct" is used:</strong> "\(\varepsilon\sim\mathcal N(0,I)\)" <em>is</em> the statement "\(x_t\) has marginal \(q(x_t\mid x_0)\)"
+(same distribution, since \(x_t=\sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\,\varepsilon\)). We cash it in via \(\mathbb E[\varepsilon]=0\), \(\operatorname{Var}(\varepsilon)=1\) below.</p>
+
+<p><strong>C. Read the marginal and match.</strong> With \(x_0\) fixed, \(x_{t-1}=A'x_0+c\varepsilon+\sigma_t z\) is a constant plus two independent Gaussians, so it's
+Gaussian with mean \(A'x_0\) (noises average to \(0\)) and variance \(c^2+\sigma_t^2\) (independent variances add). <strong>The averaging happens right here</strong>
+— in these \(\mathbb E[\cdot]\) and \(\operatorname{Var}[\cdot]\):</p>
+<div class="eq">$$\mathbb E[x_{t-1}\mid x_0]=A'x_0+c\underbrace{\mathbb E[\varepsilon]}_{0}+\sigma_t\underbrace{\mathbb E[z]}_{0}=A'x_0,\qquad
+\operatorname{Var}[x_{t-1}\mid x_0]=c^2\underbrace{\operatorname{Var}[\varepsilon]}_{1}+\sigma_t^2\underbrace{\operatorname{Var}[z]}_{1}=c^2+\sigma_t^2.$$</div>
+<p class="hint"><strong>Concrete:</strong> if \(A'x_0{=}10,\ c{=}2,\ \sigma_t{=}3\), then \(x_{t-1}=10+2\varepsilon+3z\). As \(\varepsilon,z\) sweep \(\mathcal N(0,I)\):
+the \(+2\varepsilon\) and \(-2\varepsilon\) cases are equally likely so they cancel → <strong>mean \(=10\)</strong>; the values scatter by \(2\varepsilon\)
+(variance \(4\)) plus \(3z\) (variance \(9\)) → <strong>variance \(=13=c^2+\sigma_t^2\)</strong>. That sweep‑and‑average <em>is</em> the marginalization over \(x_t\).</p>
+<p>Now demand this marginal equals the required
+\(q(x_{t-1}\mid x_0)=\mathcal N(\sqrt{\bar\alpha_{t-1}}x_0,\,(1-\bar\alpha_{t-1})I)\):</p>
+<div class="eq">$$\text{mean: } A'x_0=\sqrt{\bar\alpha_{t-1}}x_0\ \ (\forall x_0)\ \Rightarrow\ \boxed{A'=\sqrt{\bar\alpha_{t-1}}},\qquad\qquad \text{variance: } c^2+\sigma_t^2=1-\bar\alpha_{t-1}\ \ (\text{Step 2}).$$</div>
+<p>The mean half <em>forces</em> \(A'=\sqrt{\bar\alpha_{t-1}}\) — one legal value, nothing from a hat. The variance half is one equation in the two remaining
+knobs \((c,\sigma_t)\): it ties \(c\) to \(\sigma_t\), leaving \(\sigma_t\) <strong>free</strong> — the family dial. Plugging \(A'\) back:</p>
+<div class="eq">$$q_\sigma(x_{t-1}\mid x_t,x_0)=\mathcal N\!\Big(\underbrace{\sqrt{\bar\alpha_{t-1}}\,x_0}_{\text{forced}}+\underbrace{c\,\varepsilon}_{\text{knob 1}},\ \ \underbrace{\sigma_t^2 I}_{\text{knob 2}}\Big).$$</div>
+
+<h4>Step 2 — force the marginals to match (this is "Gaussian marginalization")</h4>
+<p>Demand that this reverse step, fed the correct \(q(x_t\mid x_0)\), reproduces the correct
+\(q(x_{t-1}\mid x_0)=\mathcal N(\sqrt{\bar\alpha_{t-1}}x_0,(1-\bar\alpha_{t-1})I)\). Sample the chain given \(x_0\): let
+\(\varepsilon,z\sim\mathcal N(0,I)\) independent, then</p>
+<div class="eq">$$x_{t-1}=\sqrt{\bar\alpha_{t-1}}\,x_0+c\,\varepsilon+\sigma_t\,z.$$</div>
+<p>The mean is already \(\sqrt{\bar\alpha_{t-1}}x_0\) — good. The two independent Gaussian terms add variances, so the total variance is
+\(c^2+\sigma_t^2\). Matching it to the required \((1-\bar\alpha_{t-1})\) fixes \(c\):</p>
+<div class="eq">$$c^2+\sigma_t^2=1-\bar\alpha_{t-1}\;\Longrightarrow\;c=\sqrt{\,1-\bar\alpha_{t-1}-\sigma_t^2\,}.$$</div>
+<p>That's the entire trick. One equation, one unknown eliminated — and \(\sigma_t\) survives as a <strong>free parameter for every
+member of the family</strong>. Substituting \(c\) back gives Song et al. (2021)'s reverse conditional:</p>
+<div class="eq">$$\boxed{\;q_\sigma(x_{t-1}\mid x_t,x_0)=\mathcal N\!\Big(\sqrt{\bar\alpha_{t-1}}\,x_0+\sqrt{1-\bar\alpha_{t-1}-\sigma_t^2}\;\varepsilon,\;\sigma_t^2 I\Big)\;}$$</div>
+<p>Every \(\sigma_t\ge0\) gives a <em>different</em> forward process (most of them non‑Markovian — \(x_{t-1}\) now depends on \(x_0\) as well
+as \(x_t\)), yet <strong>all share the identical marginals</strong>. By Step 1 the DDPM weights are the right denoiser for the whole family.
+No retraining — you just pick \(\sigma_t\) at sampling time.</p>
+
+<h4>Step 3 — where the two ends of the family live</h4>
+<p>\(\sigma_t\) slides continuously between the two methods you already know:</p>
+<ul>
+  <li>\(\sigma_t=\sqrt{\tilde\beta_t}\) (the DDPM posterior std) → the coefficients rearrange into <em>exactly</em> DDPM's posterior mean \(\tilde\mu_t(x_t,x_0)\)
+      with variance \(\tilde\beta_t\), so the step <strong>is</strong> the DDPM ancestral posterior — <strong>fully stochastic</strong>. (Quick check: \(1-\bar\alpha_{t-1}-\tilde\beta_t
+      =\tfrac{\alpha_t(1-\bar\alpha_{t-1})^2}{1-\bar\alpha_t}\), so \(c=\tfrac{\sqrt{\alpha_t}(1-\bar\alpha_{t-1})}{\sqrt{1-\bar\alpha_t}}\), and \(\sqrt{\bar\alpha_{t-1}}x_0+c\varepsilon\) collapses to \(\tilde\mu_t\).)</li>
+  <li>\(\sigma_t=0\) → the step's own noise is gone: the conditional \(q_\sigma(x_{t-1}\mid x_t,x_0)\) becomes a <strong>point mass at its mean</strong> (zero spread), so
+      given \(x_t,x_0\) the next \(x_{t-1}\) is <strong>determined exactly</strong>. This is <strong>DDIM</strong> — deterministic. (The <code>eta</code> knob multiplies the DDPM
+      \(\sigma_t\): <code>eta=1</code> DDPM, <code>eta=0</code> DDIM, in between a blend.)</li>
+</ul>
+
+<div class="box key">
+<span class="tag">"But if the variance is 0, how does anything still work?" — which distribution is which</span>
+<p>The worry mixes up three different objects. Keep them straight and it resolves:</p>
+<div style="overflow-x:auto">
+<table>
+<tr><th>object</th><th>what it is</th><th>at \(\sigma_t{=}0\)</th></tr>
+<tr><td>\(q(x_{t-1}\mid x_0)\)</td><td><strong>forward marginal</strong> — what the network trained on</td>
+    <td><span class="pill ok">untouched</span> — variance stays \(c^2+\sigma_t^2=1-\bar\alpha_{t-1}\) (\(c\) absorbs it)</td></tr>
+<tr><td>\(q_\sigma(x_{t-1}\mid x_t,x_0)\)</td><td>the <strong>step</strong> (reverse conditional) — the knob</td>
+    <td>variance \(=\sigma_t^2\to 0\): a deterministic step</td></tr>
+<tr><td>\(q(x_{t-1}\mid x_t)\)</td><td>the <strong>chaining</strong> — how adjacent levels connect</td>
+    <td>changed (stochastic → deterministic); the net is blind to it</td></tr>
+</table>
+</div>
+<p><strong>We set the <em>step's</em> variance to 0 — but the <em>forward marginal</em> \(q(x_{t-1}\mid x_0)\) is untouched</strong> (\(c\) grew to keep
+\(c^2+\sigma_t^2=1-\bar\alpha_{t-1}\)). And the forward marginal is the <em>only</em> thing the network needs: it was trained to denoise any in‑distribution
+\(x_t\), and it doesn't care <em>how</em> \(x_t\) was produced.</p>
+<p><strong>Why the whole process still runs — one induction.</strong> Start at \(x_T\sim\mathcal N(0,I)\) (correct marginal). Each step is built to preserve the
+marginal (Step 2, for <em>every</em> \(\sigma_t\)), so \(x_{T-1},x_{T-2},\dots\) all carry the correct forward marginal \(q(x_t\mid x_0)\) — exactly the inputs
+the network saw in training. So the net's \(\hat\varepsilon\) is valid at every step, and the deterministic map carries \(x_T\to x_0\) with \(x_0\) data‑distributed.</p>
+<p><strong>Diversity isn't lost.</strong> With \(\sigma_t{=}0\) no fresh noise is added per step, yet the marginal spread \(1-\bar\alpha_{t-1}\) is fully present —
+it's <em>inherited from \(x_T\)</em> (carried by the \(\varepsilon\)/\(x_t\) term, coefficient \(c=\sqrt{1-\bar\alpha_{t-1}}\)), not injected. Different \(x_T\) →
+different image. The dice are all rolled at the start.</p>
+</div>
+
+<h4>Step 4 — the DDIM update (exactly what the code runs)</h4>
+<p>Set \(\sigma_t=0\), so \(c=\sqrt{1-\bar\alpha_{t-1}}\). We don't know the true \(x_0\) or \(\varepsilon\), so plug in the network's
+estimates — \(\hat\varepsilon=\varepsilon_\theta(x_t,t)\) and the implied clean image
+\(\hat x_0=(x_t-\sqrt{1-\bar\alpha_t}\,\hat\varepsilon)/\sqrt{\bar\alpha_t}\):</p>
+<div class="eq">$$\boxed{\;x_{t-1}=\underbrace{\sqrt{\bar\alpha_{t-1}}\,\hat x_0}_{\text{predicted clean image}}+\underbrace{\sqrt{1-\bar\alpha_{t-1}}\,\hat\varepsilon}_{\text{re‑noise to level }t-1}\;}$$</div>
+<p>Read literally: <em>estimate the clean image, then re‑noise it to the next, lower noise level.</em> Notice what the derivation never
+used: that \(t{-}1\) is <em>adjacent</em> to \(t\). The marginal‑matching argument only referenced the two noise levels' \(\bar\alpha\)
+values, so the same formula holds for <strong>any</strong> jump \(\bar\alpha_t\to\bar\alpha_s\), \(s<t\). That is why you can
+<strong>skip timesteps</strong> — 20–50 steps instead of 1000. Step count is the speed knob, and it costs no retraining.</p>
+
+<div class="box key">
+<span class="tag">The whole story in one breath</span>
+<p>Sampling needs \(q(x_{t-1}\mid x_t)\) (②), which is intractable — so <em>every</em> method here instead uses the exact posterior
+\(q(x_{t-1}\mid x_t,x_0)\) (①) with the network's \(\hat x_0\) plugged in. But ① isn't unique: there's a one‑parameter family of exact
+posteriors — indexed by \(\sigma_t\) — that <strong>all share the marginals the loss was trained on</strong>, so the same weights fit
+every one. DDPM is the \(\sigma_t=\text{(posterior std)}\) member; <strong>DDIM is simply the \(\sigma_t=0\) member</strong>. Zero noise
+makes the step deterministic, and because the marginal argument never needed adjacent timesteps, you can also take big jumps. That is the
+entire permission slip: <em>same target, same weights, different (legal) choice of \(\sigma_t\).</em></p>
+</div>
+
+<div class="box pink">
+<span class="tag">The deepest reason: it's an ODE</span>
+<p>In the continuous limit the deterministic update becomes the <strong>probability‑flow ODE</strong></p>
+<div class="eq">$$\frac{dx}{dt}=f(t)\,x-\tfrac12 g(t)^2\,\nabla_x\log p_t(x),$$</div>
+<p>a theorem‑backed ODE with the <em>same marginals</em> \(p_t\) as the stochastic reverse at every time. DDIM is a first‑order
+discretization of it. Determinism (fixed seed → fixed image; smooth latent interpolation) is a <em>free bonus</em> of dropping the
+injected noise, not a quality tax.</p>
+</div>
+<div class="box repo"><span class="tag">In this repo</span><p><code>core/samplers/ddim.py</code> — same weights as DDPM, <code>--steps</code> is the knob, <code>eta</code> re‑introduces stochasticity.</p></div>
+
+<!-- ============================================================ 3 -->
+<h2 id="score"><span class="n">3</span>Score matching &amp; why Langevin converges to \(p(x)\)</h2>
+
+<h4>The score, and why we learn it</h4>
+<p>The <strong>score</strong> \(s(x)=\nabla_x\log p(x)\) is a vector field pointing toward higher density. Learning it dodges the
+intractable normalizer \(Z\) in \(p=\tilde p/Z\), because \(\nabla\log p=\nabla\log\tilde p\) (the constant differentiates away).</p>
+<p>We can't regress the true score, but <strong>denoising score matching</strong> gives an equivalent target: the score of the
+<em>noised</em> density is closed‑form, \(\nabla_{x_t}\log p_t=-\varepsilon/\sqrt{1-\bar\alpha_t}\). Hence:</p>
+<div class="box key">
+<span class="tag">The punchline that ties §3 back to §1</span>
+<p>Training to predict \(\varepsilon\) (DDPM) <strong>is</strong> denoising score matching. The DDPM net, divided by
+\(-\sqrt{1-\bar\alpha_t}\), is a score estimate \(\hat s(x_t,t)\). You never trained a separate "score model" — you already have one.</p>
+</div>
+
+<h4>Langevin dynamics: sampling from a score</h4>
+<p>Given \(s(x)\), draw samples with</p>
+<div class="eq">$$x_{k+1}=x_k+\tfrac{\eta}{2}\,\nabla_x\log p(x_k)+\sqrt{\eta}\,z_k,\qquad z_k\sim\mathcal N(0,I).$$</div>
+<p>Gradient ascent on log‑density (climb toward likely regions) <em>plus</em> calibrated noise (so you spread out to match the true
+distribution instead of collapsing to the single peak).</p>
+
+<h4 id="proof">Why it converges — the proof, at the right depth</h4>
+<p>This is the Euler–Maruyama discretization of the <strong>Langevin SDE</strong> \(dx=\tfrac12\nabla\log p\,dt+dW_t\). Its density
+\(\rho_t\) evolves by the <strong>Fokker–Planck equation</strong>:</p>
+<div class="eq">$$\frac{\partial\rho_t}{\partial t}=-\nabla\!\cdot\!\big(\tfrac12\rho_t\nabla\log p\big)+\tfrac12\nabla^2\rho_t.$$</div>
+<p><strong>One‑line proof that \(p\) is stationary.</strong> Substitute \(\rho_t=p\) and use \(p\,\nabla\log p=\nabla p\):</p>
+<div class="eq">$$-\nabla\!\cdot\!\big(\tfrac12 p\,\nabla\log p\big)+\tfrac12\nabla^2p=-\tfrac12\nabla^2p+\tfrac12\nabla^2p=0.$$</div>
+<p>So \(\partial_t\rho_t=0\) at \(\rho_t=p\): once the chain reaches \(p\) it stays there. A second, harder result (ergodicity / a
+log‑Sobolev inequality) says it <em>reaches</em> that fixed point from any start, exponentially fast — that existence‑and‑uniqueness
+part is the genuinely technical piece.</p>
+
+<div class="box warn">
+<span class="tag">Should you dwell on it?</span>
+<p><strong>No.</strong> Do the five‑line stationarity check once (above) so Langevin feels inevitable, then move on. The
+<em>rate</em> proofs (log‑Sobolev constants, mixing times) are a functional‑analysis rabbit hole that doesn't pay off for building
+models — because modern diffusion barely uses pure Langevin. Early NCSN needed <em>annealed</em> Langevin (a score is only accurate
+near data), and DDPM/DDIM/flow replaced that with a <em>noise schedule</em> + a single reverse pass, which is far more stable. Know
+the score↔noise identity cold; know Langevin's stationary distribution is \(p\); skip the mixing‑time analysis.</p>
+</div>
+
+<!-- ============================================================ 4 EDM -->
+<h2 id="edm"><span class="n">4</span>EDM — the design space that unifies DDPM, DDIM, score &amp; flow</h2>
+<p class="lead">EDM (Karras et al., 2022, "Elucidating the Design Space of Diffusion Models") is not a new idea so much as a
+<em>cleanup</em>: it rewrites all of the above in one continuous‑noise‑level language, then tunes each knob independently. This is
+what DIAMOND uses — so it's directly on your path.</p>
+
+<h4>4.1 Drop the timestep index; parametrize by noise level \(\sigma\) directly</h4>
+<p>Instead of \(t\in\{0,\dots,T\}\) and \(\bar\alpha_t\), EDM writes the noisy sample as</p>
+<div class="eq">$$x=x_0+\sigma\,\varepsilon,\qquad \varepsilon\sim\mathcal N(0,I),$$</div>
+<p>with \(\sigma\) ranging continuously from \(\sigma_{\min}\) (almost clean) to \(\sigma_{\max}\) (almost pure noise). DDPM's
+schedule is just <em>one</em> path through \(\sigma\)‑space; treating \(\sigma\) as the fundamental variable removes the arbitrary
+"1000 steps" and lets sampling and training be designed separately.</p>
+
+<h4>4.2 Preconditioning — the part that actually raises quality</h4>
+<p>Rather than have the raw network \(F_\theta\) predict noise, EDM wraps it so the network's job is well‑scaled at
+<em>every</em> \(\sigma\). The denoiser \(D_\theta\) (which outputs the clean \(x_0\)) is:</p>
+<div class="eq">$$D_\theta(x,\sigma)=c_{\text{skip}}(\sigma)\,x+c_{\text{out}}(\sigma)\,F_\theta\big(c_{\text{in}}(\sigma)\,x,\;c_{\text{noise}}(\sigma)\big).$$</div>
+<ul>
+  <li><strong>\(c_{\text{in}}\)</strong> scales the input so it has unit variance whatever \(\sigma\) is.</li>
+  <li><strong>\(c_{\text{skip}}\)</strong> lets the net predict a <em>correction</em> to \(x\): at low noise it should mostly copy the
+  input (denoising is easy); at high noise it must predict almost everything. The blend is \(\sigma\)‑dependent.</li>
+  <li><strong>\(c_{\text{out}}\)</strong> scales the target so the regression target has unit variance — so the loss is balanced
+  across noise levels and no single \(\sigma\) dominates the gradient.</li>
+  <li><strong>\(c_{\text{noise}}\)</strong> maps \(\sigma\) to the conditioning input (like a timestep embedding).</li>
+</ul>
+<p>All four are derived from one number, the data scale \(\sigma_{\text{data}}\), so that the network's input <em>and</em> output are
+unit‑variance at every noise level. That single normalization — not a new objective — is most of EDM's FID win. It also picks a
+sensible <strong>loss weighting</strong> \(\lambda(\sigma)\) and samples training \(\sigma\) from a log‑normal, so mid‑range noise
+levels (where most of the learning is) get the most attention.</p>
+
+<h4>4.3 The Karras noise schedule and the Heun sampler</h4>
+<p><strong>Schedule (sampling‑time):</strong> the \(\sigma\) values you visit are spaced by a power law with parameter \(\rho\):</p>
+<div class="eq">$$\sigma_i=\Big(\sigma_{\max}^{1/\rho}+\tfrac{i}{N-1}\big(\sigma_{\min}^{1/\rho}-\sigma_{\max}^{1/\rho}\big)\Big)^{\rho},\quad \rho\approx7.$$</div>
+<p>This puts <em>more</em> steps at low noise (where detail is decided) than a naive uniform schedule — a big quality‑per‑step gain.</p>
+<p><strong>Sampler:</strong> a 2nd‑order <strong>Heun</strong> integrator of the probability‑flow ODE (predict with Euler, then correct
+with the average slope). Two net calls per step, but so accurate that ~15–35 steps rival 1000‑step DDPM. Optional
+<em>stochasticity</em> (\(S_{\text{churn}}\): add a little noise then denoise) recovers some of the error‑correcting benefit of the
+SDE when you want it.</p>
+
+<div class="box key">
+<span class="tag">Where EDM fits relative to the others</span>
+<table>
+<tr><th></th><th>Reframes training?</th><th>Reframes sampling?</th><th>Relation to the rest</th></tr>
+<tr><td>DDIM</td><td>no</td><td>yes (deterministic, skip)</td><td>1st‑order ODE on DDPM weights</td></tr>
+<tr><td>Score/Langevin</td><td>no (=DDPM)</td><td>yes (stochastic MCMC)</td><td>the SDE view of the same net</td></tr>
+<tr><td><strong>EDM</strong></td><td><strong>yes</strong> (preconditioning + weighting)</td><td><strong>yes</strong> (Karras σ + Heun)</td><td>the <em>unifying</em> continuous‑σ framework; DDPM/DDIM/score are special cases of its design axes</td></tr>
+<tr><td>Flow matching</td><td>yes (velocity target)</td><td>yes (ODE)</td><td>a different, straighter path through the same noise↔data space (see §5)</td></tr>
+</table>
+<p>Mental model: <strong>EDM and flow matching are the two modern "well‑engineered" reframings.</strong> EDM keeps the
+noise‑level picture and perfects its scaling; flow matching changes the <em>path</em> to a straight line. They overlap more than they
+compete — recent work shows flow matching is EDM with a particular schedule/weighting choice.</p>
+</div>
+<div class="box repo"><span class="tag">In this repo (now implemented)</span><p>Objective: <code>core/edm.py</code> — the four preconditioning coefficients \(c_{\text{skip}},c_{\text{out}},c_{\text{in}},c_{\text{noise}}\), log‑normal \(\sigma\) sampling, and the weighted denoiser loss (the weight cancels \(c_{\text{out}}^2\), so it's balanced across noise levels). Sampler: <code>core/samplers/edm.py</code> — Karras \(\sigma\) schedule + 2nd‑order Heun. Turn on with <code>diffusion.objective: edm</code>; run <code>configs/overfit_edm.yaml</code>. DIAMOND's production EDM is in <code>diamond/src/models/diffusion/</code> for reference.</p></div>
+
+<!-- ============================================================ 5 FLOW -->
+<h2 id="flow"><span class="n">5</span>Flow matching — the full derivation</h2>
+<p>The one you wanted in most depth: starting conditions, the vector field, the continuity equation, where divergence enters, the
+"do it for one point then generalize" trick, the \(x_0{-}x_1\) pairing, and the known issue. Built from nothing.</p>
+
+<div class="box"><span class="tag">Convention (read this first)</span>
+<p>Flow‑matching papers put <strong>noise at \(t{=}0\) and data at \(t{=}1\)</strong> and integrate <em>forward</em> in \(t\). That's
+the opposite of the DDPM index in §1–4. We follow the flow convention here (and it's exactly what the repo's
+<code>core/flow_matching.py</code> does).</p></div>
+
+<h4>5.1 The primitives (your two ingredients)</h4>
+<p>Pick a <strong>probability path</strong> \(p_t(x)\) that morphs simple noise \(p_0=\mathcal N(0,I)\) into data \(p_1=p_{\text{data}}\),
+and learn a <strong>velocity (vector) field</strong> \(u_t(x)\) — the course's symbol; some papers write \(v\) — that transports samples
+along it. Four objects, in order:</p>
+<ul>
+  <li><strong>trajectory</strong> \(x_t\): one sample's path over time;</li>
+  <li><strong>flow</strong> \(\psi_t(x_0)\): the whole bundle of trajectories from every start \(x_0\);</li>
+  <li><strong>probability path</strong> \(p_t(x)\): the distribution of \(x_t\) at time \(t\);</li>
+  <li><strong>velocity field</strong> \(u_t(x)\): "where to move — direction and speed — at time \(t\), location \(x\)."</li>
+</ul>
+<p>Generation = draw \(x_0\sim\mathcal N(0,I)\) and integrate the ODE forward:</p>
+<div class="eq">$$\frac{dx_t}{dt}=u_t(x_t),\qquad \hat x_1=x_0+\int_0^1 u_t^\theta(x_t)\,dt.$$</div>
+<div class="box"><span class="tag">🛣 Highway vs 🧭 Compass — velocity vs score</span>
+<p>The course's sharpest intuition: the <strong>velocity \(u_t(x)\) is a highway</strong> — it tells you the exact road, direction
+<em>and</em> speed to travel. The <strong>score \(\nabla_x\log p\) is only a compass</strong> — it points toward higher density but not
+how far or fast. Flow matching learns the highway directly, which is why a plain ODE step follows it so cleanly.</p></div>
+<p>The two things "needed": <strong>boundary conditions</strong> (\(p_0=\)noise, \(p_1=\)data) and a field that <strong>"obeys the
+continuity equation"</strong> — the constraint tying \(u_t\) to \(p_t\), next. When they hold, we say \(u_t\) <strong>generates</strong>
+\(p_t\): if \(x_0\sim p_0\) and \(\dot x_t=u_t(x_t)\), then \(x_t\sim p_t\) for all \(t\).</p>
+
+<h4>5.2 The continuity equation — and where divergence enters</h4>
+<p>The course builds this from a <strong>"mass conservation"</strong> fluid picture: draw a little box; the rate the density inside
+changes equals <em>inflow − outflow</em>. If probability mass is only <em>moved</em> by \(u_t\) (never created/destroyed), the density
+must satisfy the <strong>continuity (transport) equation</strong>:</p>
+<div class="eq">$$\boxed{\;\frac{\partial p_t}{\partial t}(x)=-\,\nabla\!\cdot\!\big(p_t\,u_t\big)(x)\;}$$</div>
+<p><strong>This is the only place divergence \(\nabla\cdot\) is conceptually needed — so first, what it <em>is</em>.</strong> The
+divergence of a vector field at a point is a single number: <em>the net rate stuff flows out of a tiny box around that point</em>
+(outflow − inflow, per unit volume). Positive ⇒ a source (net leaving); negative ⇒ a sink (net arriving).</p>
+<p><strong>The subtlety the course flags with a big ❌/✅: the divergence is of the <em>flux</em> \(p_t\,u_t\), not the bare velocity
+\(u_t\).</strong> Here is <em>why</em>, physically. What actually moves is <em>probability mass</em>, and the amount crossing a point
+per second is <em>how much is there</em> × <em>how fast it's going</em> \(=p_t\,u_t\) — the "mass current." Velocity alone gives the
+speed but says nothing about how much mass is riding it; only the flux \(p_t u_t\) is the quantity that's conserved and bookkept. So
+read the boxed equation in words: <strong>density change at a point = minus the net flux out of it</strong> — more mass leaving than
+arriving ⇒ \(p_t\) there drops (that's the minus sign). A pair \((p_t,u_t)\) obeying it is <em>compatible</em>, and then \(u_t\)
+<strong>generates</strong> \(p_t\). <em>Hold onto "flux, not velocity" — it is the through‑line that makes the whole averaging trick in
+5.3 work.</em></p>
+<p class="fn">(Divergence returns if you want exact log‑likelihoods: \(\tfrac{d}{dt}\log p_t(x_t)=-\nabla\!\cdot\!u_t(x_t)\) — note here
+it's the <em>bare</em> velocity, because now you're tracking one moving sample's density, not a mass balance over space. Useful for
+evaluation, not for training or sampling.)</p>
+
+<div class="box key">
+<span class="tag">Proof it actually works — the moving samples' density really does obey this equation</span>
+<p>We didn't assume the boxed equation; it is <em>forced</em> the moment you push samples along the ODE. One idea — "probe with a test
+function" — makes it rigorous in four lines, and it proves <em>both</em> halves at once: that the equation holds, <em>and</em> that "\(u_t\)
+generates \(p_t\)."</p>
+<p><strong>Setup.</strong> Start \(x_0\sim p_0\) and move every sample by \(\dot x_t=u_t(x_t)\). Let \(p_t\) be the resulting density of
+\(x_t\) (its "pushforward"). Claim: \(p_t\) must satisfy \(\partial_t p_t=-\nabla\!\cdot(p_t u_t)\).</p>
+<p><strong>The trick — track the average of an arbitrary smooth "probe" \(\varphi\) in two ways, and equate.</strong></p>
+<p><em>Way 1 — move the sample</em> (chain rule + the ODE \(\dot x_t=u_t\)):</p>
+<div class="eq">$$\frac{d}{dt}\,\mathbb E[\varphi(x_t)]=\mathbb E\big[\nabla\varphi(x_t)\cdot\dot x_t\big]=\mathbb E\big[\nabla\varphi(x_t)\cdot u_t(x_t)\big]=\int \nabla\varphi\cdot u_t\,p_t\,dx.$$</div>
+<p><em>Way 2 — differentiate the density</em> (since \(\mathbb E[\varphi(x_t)]=\int\varphi\,p_t\,dx\)):</p>
+<div class="eq">$$\frac{d}{dt}\,\mathbb E[\varphi(x_t)]=\int \varphi\,\partial_t p_t\,dx.$$</div>
+<p><strong>Equate the two, then integrate by parts</strong> (the boundary term vanishes — \(\varphi\) decays / has compact support):</p>
+<div class="eq">$$\int \varphi\,\partial_t p_t\,dx=\int \nabla\varphi\cdot u_t\,p_t\,dx=-\int \varphi\,\nabla\!\cdot(p_t u_t)\,dx.$$</div>
+<p>This holds for <em>every</em> probe \(\varphi\). Two functions that integrate the same against <em>all</em> \(\varphi\) must be equal, so the
+integrands match:</p>
+<div class="eq">$$\boxed{\;\partial_t p_t=-\,\nabla\!\cdot(p_t u_t)\;}$$</div>
+<p>"Probe against every \(\varphi\)" is exactly how you turn "samples move by \(u\)" into a statement about the <em>density</em>. And notice the
+flux \(p_t u_t\) appeared <em>on its own</em>, from integrating \(\nabla\varphi\cdot u_t\,p_t\) by parts — that is precisely why the divergence
+lands on the flux, not the bare velocity. <em>(Physics gives the same law faster: mass in a fixed box changes only by what crosses its walls,
+\(\frac{d}{dt}\int_\Omega p=-\oint_{\partial\Omega}p\,u\cdot n\), and the divergence theorem rewrites the wall‑flux as \(\int_\Omega\nabla\!\cdot(pu)\).)</em></p>
+</div>
+
+<h4>5.3 The problem, and the one‑sample cheat</h4>
+<p>Building \(v_t\) for the full data distribution directly needs an intractable integral. The trick you half‑remembered —
+<strong>do it for one point, then generalize.</strong></p>
+<div class="box key">
+<span class="tag">Step A — one data point is trivial (the conditional path)</span>
+<p>Condition on a single data sample \(x_1\). Define a <em>conditional</em> probability path — a Gaussian that starts wide and
+collapses onto \(x_1\) (this specific choice is <strong>rectified flow</strong>, what SD3/Flux use and what this repo implements):</p>
+<div class="eq">$$p_t(x\mid x_1)=\mathcal N\big(t\,x_1,\;(1-t)^2 I\big)\quad\Rightarrow\quad t{=}0:\ \mathcal N(0,I)=p_0,\ \ t{=}1:\ \delta_{x_1}.$$</div>
+<p>Its trajectory is the straight interpolation \(x_t=(1-t)\,x_0+t\,x_1\) with \(x_0\sim\mathcal N(0,I)\). The conditional velocity
+that generates it is (course's form, then simplified using the interpolation):</p>
+<div class="eq">$$u_t(x\mid x_1)=\frac{x_1-x}{1-t}\;\xrightarrow{\ x=x_t\ }\;\boxed{\;u_t(x_t\mid x_1)=x_1-x_0\;}$$</div>
+<p><strong>Why that cancellation.</strong> Substitute the interpolation \(x=x_t=(1-t)x_0+t x_1\) into \((x_1-x)/(1-t)\): the numerator
+becomes \(x_1-x_t=x_1-(1-t)x_0-t x_1=(1-t)(x_1-x_0)\), so the \((1-t)\) cancels top and bottom, leaving \(x_1-x_0\). Two readings of the
+<em>same</em> field: the left form \((x_1-x)/(1-t)\) is the velocity <strong>at any position \(x\)</strong> (what the ODE and the
+continuity check need — a field over all of space); the right form \(x_1-x_0\) is its value <strong>along this pair's own straight
+line</strong> (a single constant vector — what the loss will regress).</p>
+<p>This is your "\(x_0{-}x_1\) is different each time." Per pair the target velocity is just the displacement from the noise sample to
+the data sample — constant along the line, nothing to learn per pair.</p>
+</div>
+<div class="box key">
+<span class="tag">Step B — the marginalization theorem (the "generalize to all points" magic)</span>
+<p>Average the conditional paths over the data to get the <strong>marginal path</strong>, and average the conditional fields —
+weighted by the <em>posterior</em> \(p(x_1\mid x)\) — to get the <strong>marginal field</strong>:</p>
+<div class="eq">$$p_t(x)=\int p_t(x\mid x_1)\,p_{\text{data}}(x_1)\,dx_1,\qquad
+u_t(x)=\int u_t(x\mid x_1)\,\underbrace{\frac{p_t(x\mid x_1)\,p_{\text{data}}(x_1)}{p_t(x)}}_{=\,p(x_1\mid x)}\,dx_1
+=\mathbb E\big[u_t(x\mid x_1)\mid x_t{=}x\big].$$</div>
+<p><strong>Why weighted by the posterior \(p(x_1\mid x)\), and not a plain average?</strong> A single location \(x\) sits on
+<em>many</em> straight lines — every \((x_0,x_1)\) pair whose interpolant happens to pass through \(x\). Each one wants to move with its
+own velocity \(x_1-x_0\), and they disagree. The right marginal velocity at \(x\) is the average of those, but weighted by how plausible
+each destination \(x_1\) is <em>given you actually landed at \(x\)</em> — that's the posterior \(p(x_1\mid x)\); a data point that rarely
+routes through \(x\) barely gets a vote. And that exact weighting isn't a modelling choice — it's forced by 5.2: what <em>adds</em> across
+the pairs is <strong>flux</strong> (the mass currents \(p_t u_t\)), not velocity. So you sum the conditional fluxes and divide by the total
+density \(p_t(x)\) — and "\(\sum\)flux \(/\) density" <em>is</em> the posterior‑weighted mean written above. (There's "flux, not velocity"
+paying off.)</p>
+<p>So the marginal velocity is a <strong>posterior mean</strong>: "given where you are, where should you go?" <strong>Theorem
+(Lipman 2022 / Liu 2022):</strong> if each conditional pair satisfies the continuity equation, this average \((p_t,u_t)\) does too — and
+\(p_t\) interpolates exactly noise→data. The simple per‑sample fields, averaged, <em>are</em> the true global transport — without ever
+computing the intractable \(p_t\).</p>
+<p class="hint"><strong>Is that always true — do the conditional and the marginal both satisfy continuity every time?</strong> Yes, and it's
+no coincidence: it's pure <em>linearity</em> (full proof in the pink box below). Given only that <em>each</em> conditional pair obeys continuity
+— plus mild regularity to swap \(\partial_t,\nabla\cdot\) with the integral — the marginal pair must too. Nothing here is special to
+Gaussians or straight lines; those are just our convenient <em>choice</em> of conditional path. The one thing you must get right is the
+averaging: sum the <strong>flux</strong> and divide by density (the posterior‑weighted mean). Naively averaging the <em>velocities</em>
+would give a different, wrong field. So — to your question — what was "discovered" in 2022 is <em>not</em> this identity (it's old
+mass‑conservation math); it's that the identity lets you <strong>train</strong> the field almost for free. See the "why only 2022?" box after 5.3.</p>
+</div>
+
+<div class="box pink">
+<span class="tag">Why the averaged field <em>satisfies</em> continuity — general, and it applies to our case</span>
+<p>The argument is general (it holds for <em>any</em> conditional path+velocity that individually satisfies continuity), and <strong>our rectified‑flow pair is
+exactly such a case</strong>, so it applies directly. Three steps, with our specific pair plugged in.</p>
+<p><strong>Step 1 — each conditional satisfies continuity.</strong> "The velocity generates the path" <em>means</em>: for each fixed \(x_1\),</p>
+<div class="eq">$$\partial_t\, p_t(x\mid x_1)=-\,\nabla\!\cdot\!\big(p_t(x\mid x_1)\,u_t(x\mid x_1)\big),\qquad\text{ours: }\ p_t(\cdot\mid x_1)=\mathcal N(tx_1,(1-t)^2I),\ \ u_t(x\mid x_1)=x_1-x_0.$$</div>
+<p><strong>Why "ours does" is free.</strong> Our conditional velocity \(u_t(x_t\mid x_1)=x_1-x_0\) is literally the time‑derivative \(\dot x_t\)
+of the moving sample \(x_t=(1-t)x_0+t x_1\). So the proof just above ("probe with \(\varphi\)") applies <em>verbatim</em> at each fixed \(x_1\)
+— no new algebra needed. If you'd rather see the PDE ground out by hand, here it is:</p>
+<div class="box" style="background:var(--panel2);border-left-color:var(--muted)">
+<p style="margin:0 0 6px"><strong>Brute‑force check (1‑D, fully concrete).</strong> Fix \(x_1\); write \(m=t x_1\), \(\sigma=1-t\), so
+\(p(x,t)=\frac{1}{\sqrt{2\pi}\,\sigma}e^{-(x-m)^2/2\sigma^2}\) and \(u=\dfrac{x_1-x}{\sigma}\). Differentiate each side (using \(\dot m=x_1,\ \dot\sigma=-1\)):</p>
+<div class="eq">$$\partial_t p=p\Big[\tfrac1\sigma+\tfrac{(x-m)\,x_1}{\sigma^2}-\tfrac{(x-m)^2}{\sigma^3}\Big],\qquad
+-\partial_x(p\,u)=p\Big[\tfrac1\sigma+\tfrac{(x-m)(x_1-x)}{\sigma^3}\Big].$$</div>
+<p style="margin:6px 0 0">Their difference is \(\dfrac{p\,(x-m)}{\sigma^3}\big[x_1\sigma-(x-m)-(x_1-x)\big]\), and the bracket vanishes:
+\(x_1(1-t)-(x-tx_1)-(x_1-x)=0\). So \(\partial_t p=-\partial_x(p\,u)\) <em>exactly</em> — our Gaussian conditional obeys continuity, confirmed by hand.</p>
+</div>
+<p><strong>Step 2 — average over \(x_1\); the \(\partial_t\) and \(\nabla\cdot\) pass straight through the integral</strong> (both are linear operators):</p>
+<div class="eq">$$p_t(x)=\!\int p_t(x\mid x_1)p_{\text{data}}(x_1)\,dx_1\ \Rightarrow\ \partial_t p_t(x)=\!\int \partial_t p_t(x\mid x_1)\,p_{\text{data}}\,dx_1=-\,\nabla\!\cdot\!\underbrace{\int p_t(x\mid x_1)\,u_t(x\mid x_1)\,p_{\text{data}}\,dx_1}_{\text{the marginal flux}}.$$</div>
+<p><strong>Step 3 — name that flux \(p_t(x)\,u_t(x)\), which defines the marginal velocity:</strong></p>
+<div class="eq">$$u_t(x)=\frac{1}{p_t(x)}\!\int u_t(x\mid x_1)\,p_t(x\mid x_1)p_{\text{data}}(x_1)\,dx_1=\mathbb E\big[u_t(x\mid x_1)\mid x_t{=}x\big]\ \overset{\text{ours}}{=}\ \mathbb E\big[x_1-x_0\mid x_t{=}x\big].$$</div>
+<p>Substituting back gives \(\partial_t p_t=-\nabla\!\cdot(p_t u_t)\): <strong>the marginal pair satisfies continuity.</strong> So for <em>our</em> rectified flow the
+true transport field is exactly \(u_t(x)=\mathbb E[x_1-x_0\mid x_t{=}x]\) — and the CFM loss (5.4), being MSE onto \(x_1-x_0\), learns precisely that
+conditional expectation. <strong>The trained \(u_\theta^\star\) <em>is</em> the continuity‑satisfying field, in our case, not just in the abstract.</strong></p>
+<p class="hint">Same shape as §1: there the reverse <em>mean</em> was linear in \(x_0\), so averaging conditional posteriors landed on the true marginal mean; here the
+<em>flux</em> \(p_t u_t\) is linear, so averaging conditional fields lands on the true transport. Linear operator + MSE‑gives‑conditional‑mean = the averaged
+target is the real target.</p>
+</div>
+
+<div class="box pink">
+<span class="tag">If the math is this old, why is flow matching from 2022?</span>
+<p>Fair confusion — Euler wrote the continuity equation in <strong>1757</strong>, and ODEs, Gaussians, and the divergence theorem are
+centuries old. Nothing above is new <em>mathematics</em>. What was missing for 250 years was a way to <em>train</em> the velocity field cheaply.</p>
+<ul>
+  <li><strong>2018 — the idea existed but was slow.</strong> Continuous Normalizing Flows (Neural ODE / FFJORD) already generated data by
+      integrating an ODE whose density obeys continuity. But they trained by <em>maximum likelihood</em>, which needs the divergence term
+      \(\nabla\!\cdot u\) (a trace/Jacobian) <em>and</em> a full ODE solve <em>inside every gradient step</em>. Expensive, memory‑hungry,
+      unstable — it never scaled. That wall stood for four years.</li>
+  <li><strong>2020–21 — diffusion primed the ground.</strong> DDPM and score‑based SDEs proved noise→data generation works at scale, and
+      the probability‑flow ODE (Song 2021) showed a deterministic ODE with the right marginals exists. Crucially they popularised the exact
+      trick being transplanted: <em>an intractable target that is a conditional expectation can be learned by regressing the freely‑sampled
+      conditional</em> — the same identity behind "predict the noise" in §1.</li>
+  <li><strong>2022 — the unlock: simulation‑free training.</strong> Lipman/Liu/Albergo saw you can regress the network onto the
+      <em>conditional</em> velocity \(x_1-x_0\) (free to sample), which has the <em>same gradient</em> as the intractable marginal loss (5.4).
+      No ODE in the loop, no divergence, no determinant — just plain MSE on billions of \((x_0,x_1)\) pairs. Plus the freedom to pick
+      <em>straight‑line</em> paths, which sample in far fewer steps.</li>
+</ul>
+<p><strong>So the obstacle was never the continuity equation</strong> — it was "how do you fit \(u\) without integrating the ODE and computing
+a Jacobian every step." That answer, not the math, is what arrived in 2022. Flow matching is a <em>training recipe</em>, and it rode the
+diffusion wave (big nets, big compute, proof that noise→data works) to become practical.</p>
+</div>
+
+<h4>5.4 The loss — why regressing the <em>conditional</em> field learns the <em>marginal</em> one</h4>
+<p>The ideal Flow‑Matching loss \(\mathcal L_{\text{FM}}=\mathbb E\lVert u_t^\theta(x)-u_t(x)\rVert^2\) is intractable (\(u_t\) is that
+integral). But we can sample the conditional target \(x_1-x_0\) for free, giving the tractable <strong>Conditional Flow Matching</strong> loss:</p>
+<div class="eq">$$\mathcal L_{\text{CFM}}=\mathbb E_{t,x_1,x}\Big[\big\lVert u_t^\theta\big((1-t)x_0+t x_1,\,t\big)-\underbrace{(x_1-x_0)}_{u_t(x\mid x_1)}\big\rVert^2\Big].$$</div>
+<div class="box key"><span class="tag">The load‑bearing fact the course states</span>
+<p>\(\;\nabla_\theta\mathcal L_{\text{FM}}=\nabla_\theta\mathcal L_{\text{CFM}}\;\) — the two losses have the <em>same gradient</em>
+(expand the squared norm and use the definition of the marginal). So minimizing the tractable CFM loss trains the exact same field as
+the intractable FM loss.</p></div>
+<p><strong>Why, in one line</strong> — the same identity that makes DDPM's noise‑prediction work: the L2 minimizer is the
+<em>conditional expectation of the target</em>. The net sees only \(x=x_t\) (many pairs land there), so the loss forces</p>
+<div class="eq">$$u_\theta^\star(x,t)=\mathbb E\big[x_1-x_0\mid x_t=x\big]=u_t(x),$$</div>
+<p>exactly the marginal field from Step B. Minimizing the tractable per‑pair loss yields the intractable global velocity —
+structurally identical to why "predict the noise" recovers the score.</p>
+
+<h4>5.5 Sampling</h4>
+<p>Draw \(x_0\sim\mathcal N(0,I)\), integrate \(\dot x=u_\theta(x,t)\) with Euler or midpoint over ~10–30 steps
+(Euler step: \(x_{t_i}=x_{t_{i-1}}+u_\theta(x_{t_{i-1}})\,(t_i-t_{i-1})\)). Straight target paths ⇒ a nearly straight learned field ⇒
+few steps suffice (and enable 1–4 step distilled sampling later).</p>
+<div class="box repo"><span class="tag">In this repo (now implemented)</span>
+<p>Objective: <code>core/flow_matching.py</code> — draws \(t\sim U(0,1)\), forms \(x_t=(1-t)\,\text{noise}+t\,\text{data}\), regresses
+\(v\) onto \(\text{data}-\text{noise}\). Sampler: <code>core/samplers/flow_matching.py</code> — Euler <em>and</em> midpoint
+integrators. Turn it on with <code>diffusion.objective: flow</code>; run <code>configs/overfit_flow.yaml</code>. Time is rescaled by
+1000 before the net so the shared time‑embedding sees a DDPM‑like range.</p>
+</div>
+
+<h4 id="flowissue">5.6 The issue you heard about</h4>
+<div class="box warn">
+<span class="tag">Crossing paths → curved marginal field → more steps</span>
+<p>The <em>conditional</em> paths are straight, but two different pairs can route through the <strong>same point</strong> \(x\) at time
+\(t\) heading different directions. There the marginal field \(u_t(x)=\mathbb E[x_1-x_0\mid x_t=x]\) is the <em>average</em> of
+conflicting velocities — so the actual learned trajectory \(u_t^\theta\) is <strong>non‑linear</strong> and <strong>bends</strong>, even
+though every target was straight. Curved paths need more ODE steps ("no magic solver saves the day"), undercutting the few‑step promise.
+The course's fix:</p>
+<ul>
+  <li><strong>Reflow / rectification (Liu 2022, "Flow Straight and Fast"):</strong> the model you just trained is the "1‑rectified
+  flow." Now generate <em>paired</em> data by simulating it — \(z_0\sim\mathcal N(0,I)\), \(z_1=\psi_1^\theta(z_0)\) — so each noise is
+  paired with the data it <em>actually</em> flows to (not a random one), and retrain on \((z_0,z_1)\) to get the "2‑rectified flow."
+  Repeat.</li>
+  <li>(Adjacent idea, not in the deck: <strong>minibatch optimal‑transport coupling</strong> pairs \(x_0{\leftrightarrow}x_1\) to
+  minimize transport cost, achieving similar straightening in one shot.)</li>
+</ul>
+<p><strong>Why reflow works — two proofs the course sketches:</strong> (1) <em>distribution preserved</em> — \(X\) and the reflowed
+\(Z\) satisfy the same continuity equation, so by uniqueness \(p_t^X=p_t^Z\) for all \(t\) (you still sample \(p_{\text{data}}\));
+(2) <em>paths straighten</em> — a straightness measure \(S(Z^k)\) telescopes to \(\min_{k\le K}S(Z^k)\le O(1/K)\). In practice 1–2
+reflows, then you can afford plain Euler at inference. Root cause, crisply: <em>independent</em> noise↔data coupling creates the
+crossings; a model‑induced (or OT) coupling removes them.</p>
+</div>
+
+<h4>5.7 Why flow matching is winning now (vs DDPM / DDIM / EDM)</h4>
+<p>SD3, Flux, and most 2024–25 models train with flow matching (usually the rectified / linear‑interpolant form). It's not that the others are
+"wrong" — they're all the same generative‑ODE family (see §4, §5.8) — but flow matching is the <em>most convenient point</em> in that space. Concretely:</p>
+<ul>
+  <li><strong>Straighter trajectories ⇒ fewer steps.</strong> The whole game at inference is "how many network evaluations (NFEs) to integrate the ODE
+      accurately," and that count is set by how much the path <em>bends</em>: Euler's error per step is \(\approx\tfrac12\Delta t^2\,\ddot x\) — proportional
+      to curvature — so a straight, constant‑speed path (\(\ddot x=0\)) is integrated <em>exactly in one step</em>, while a curved one needs many small ones.
+      <div style="margin:6px 0 2px"><strong>What "conditional path" means, and why FM's is straight.</strong> Fix one noise \(x_0\) and one data point \(x_1\);
+      the conditional path is the route the interpolation draws <em>between those two fixed endpoints</em>. Every method writes it as
+      \((\text{noise coeff})\,x_0+(\text{signal coeff})\,x_1\) — they differ only in <em>which route the coefficients take</em> from "all noise" \((1,0)\)
+      to "all data" \((0,1)\):</div>
+      <ul style="margin:2px 0">
+        <li><strong>Flow matching:</strong> coefficients \((1-t,\,t)\) — the <em>straight diagonal</em>. So \(x_t=(1-t)x_0+t x_1\) is a straight line at
+            <em>constant</em> velocity \(x_1-x_0\): zero curvature.</li>
+        <li><strong>DDPM / VP:</strong> coefficients \(\big(\sqrt{1-\bar\alpha_t},\,\sqrt{\bar\alpha_t}\big)\) obey \(a^2+b^2=1\), so they ride the
+            <em>quarter‑circle</em> from \((1,0)\) to \((0,1)\). Same endpoints, but the <em>arc</em> — the point sweeps a curved route, its velocity always
+            turning.</li>
+        <li><strong>EDM / VE:</strong> \(x_t=x_1+\sigma_t\varepsilon\) with a very non‑linear \(\sigma_t\) (Karras \(\rho{=}7\)); the direction is fixed but the
+            <em>speed</em> \(\dot\sigma_t\) swings enormously and the marginal ODE curves sharply near the data — exactly why EDM needs 2nd‑order Heun and a
+            hand‑tuned \(\sigma\)-spacing to keep the step count down.</li>
+      </ul>
+      Same two endpoints, but DDPM takes the circular <em>arc</em> and flow matching the straight <em>chord</em>. Because FM's conditional targets are straight
+      and constant‑speed, the learned marginal field stays close to straight, so plain Euler with ~10–30 steps (1–4 after distillation) tracks it; the
+      arc/curved schedules bend the sampling ODE and cost steps. "More curved" is precisely the property that hurts DDPM/EDM here.
+      <div class="box" style="background:var(--panel2);border-left-color:var(--muted);margin-top:8px">
+      <span class="tag">The "sin/cos" schedule you heard about — concretely</span>
+      <p style="margin:0 0 6px">That's the <strong>cosine schedule</strong> (Improved DDPM, Nichol–Dhariwal 2021), and it <em>is</em> the arc. Let an angle
+      \(\theta_t\) sweep \(0\to\tfrac\pi2\) and set</p>
+      <div class="eq">$$\bar\alpha_t=\cos^2\theta_t\ \Rightarrow\ \sqrt{\bar\alpha_t}=\cos\theta_t,\ \ \sqrt{1-\bar\alpha_t}=\sin\theta_t,\qquad x_t=\cos\theta_t\,x_1+\sin\theta_t\,\varepsilon.$$</div>
+      <p style="margin:6px 0">The coefficient pair \((\cos\theta_t,\sin\theta_t)\) is a point on the <strong>unit circle</strong>, sweeping the quarter‑arc — that is exactly why the
+      VP/DDPM conditional path curves: it's steered by a rotating angle. (Original DDPM used a <em>linear</em> \(\beta_t\); cosine replaced it because linear
+      wiped out the signal too fast near the end — but it's still an arc.) <strong>DDIM</strong> is only a sampler, so it inherits whatever schedule — usually
+      cosine — the model was trained with.</p>
+      <p style="margin:6px 0"><strong>EDM</strong> isn't sin/cos — it's variance‑<em>exploding</em>: \(x=x_1+\sigma\varepsilon\), with \(\sigma\) from \(\sim0.002\) to \(\sim80\)
+      on a power‑law grid \(\sigma_i\propto(\cdot)^{\rho},\ \rho{=}7\). A different curve, same consequence: non‑uniform speed ⇒ curved sampling ODE ⇒ Heun + tuned spacing.</p>
+      <p style="margin:6px 0 0"><strong>Flow matching drops the trig entirely:</strong> coefficients \((1-t,\,t)\) — the straight <em>chord</em> from \((1,0)\) to \((0,1)\), constant
+      velocity \(x_1-x_0\). (You <em>could</em> build a cosine‑path flow — Lipman's framework allows any Gaussian path — but rectified flow / SD3 / Flux
+      deliberately pick the straight line. That choice <em>is</em> the point.)</p>
+      </div></li>
+  <li><strong>Simpler, schedule‑free objective.</strong> Diffusion forces a stack of <em>coupled</em> choices, each affecting stability and quality: a
+      variance schedule \(\beta_t\) (linear? cosine?), an ELBO to derive, <em>what</em> the net predicts (\(\varepsilon\) vs \(x_0\) vs \(v\)), and a
+      per‑timestep loss weighting. Flow matching collapses all of it to one recipe: sample \(t\sim U(0,1)\), interpolate \(x_t=(1-t)x_0+t x_1\), regress the
+      velocity onto \(x_1-x_0\). No \(\bar\alpha_t\) schedule, no ELBO, no noise‑vs‑\(x_0\) debate — <em>one</em> target (the displacement), and it behaves the
+      same at every \(t\). Fewer things to tune or get wrong.</li>
+  <li><strong>Well‑behaved target.</strong> The velocity target \(x_1-x_0\) has roughly unit scale across all \(t\); no blow‑ups like DDPM's
+      \(1/\sqrt{\bar\alpha_t}\) at high noise (the §1 "scar"). Training is more stable.</li>
+  <li><strong>Continuous‑time &amp; solver‑agnostic.</strong> It's an ODE from the start (no "drop the noise term" step), so any off‑the‑shelf ODE solver
+      (Euler, Heun, DPM‑Solver) plugs in, and time is genuinely continuous.</li>
+  <li><strong>EDM already got ~80% of the way.</strong> EDM's insight (preconditioning, \(\sigma\)-space, Heun) made diffusion far more efficient; flow
+      matching keeps EDM's good ideas but drops the curved schedule for a straight one — so it's the natural successor, not a break.</li>
+</ul>
+
+<div class="box warn">
+<span class="tag">Flow matching's real issues (don't oversell it)</span>
+<p style="margin:0 0 8px">Each issue below as <em>what · why · impact</em>.</p>
+<ul>
+  <li><strong>The marginal field is still curved — so "1 step" isn't free.</strong>
+      <em>What:</em> even vanilla FM's sampling paths bend. <em>Why:</em> straight <em>conditional</em> targets average into a <em>bent</em> marginal field
+      wherever training lines cross (5.6). <em>Impact:</em> you still need a handful of Euler steps (~10–30); genuine 1‑step needs straightening (reflow) or
+      distillation (§12) — the linear interpolant buys "few," not "one."</li>
+  <li><strong>Reflow trades straightness for fidelity.</strong>
+      <em>What:</em> each reflow round straightens paths but erodes sample quality. <em>Why:</em> reflow retrains on the model's <em>own</em> generated pairs
+      \((x_0,\text{Flow}(x_0))\), so any error in the current model is baked into the next round's training data — errors compound and fine detail/sharpness
+      drifts. <em>Impact:</em> 1–2 reflows is the sweet spot; "perfectly straight" and "high fidelity" pull against each other, so people stop early.</li>
+  <li><strong>The high‑noise end (= the <em>start</em> of sampling) is still hard.</strong>
+      <em>What:</em> near \(t{\approx}0\) you're at almost pure noise — the very first steps of generation. <em>Why:</em> a near‑noise \(x_t\) is consistent
+      with a <em>huge</em> set of possible final images, so the per‑pair target \(x_1-x_0\) swings wildly across the many pairs landing at the same \(x_t\); the
+      net can only learn their <em>average</em> \(\mathbb E[x_1-x_0\mid x_t]\), which points at the data's "center of mass" in general — a blurry,
+      non‑committal direction. The trajectory only <em>commits</em> to a specific image later, as noise drops and the posterior over \(x_1\) narrows (the same
+      "decide gradually" story as §1). <em>Impact:</em> this region is the <em>hardest to learn</em> (mushy, high‑variance target) and the most
+      error‑sensitive — which is exactly why modern training samples \(t\) from a <strong>logit‑normal</strong> (§10) to spend capacity there, rather than
+      uniformly. It's the same "posterior is wide at high noise" wall diffusion hits.</li>
+  <li><strong>The coupling (which noise pairs with which data) matters.</strong>
+      <em>What:</em> the pairing sets the curvature. <em>Why:</em> random independent pairing makes lines cross a lot → curvature (5.6). <em>How the fix works —
+      minibatch‑OT:</em> inside each training minibatch of \(N\) noise and \(N\) data samples, solve a small assignment problem that pairs them to minimize total
+      \(\sum\lVert x_0-x_1\rVert^2\); an optimal (non‑crossing) assignment means the straight targets barely cross, straightening the field <em>in one shot</em>
+      (no iterating like reflow). <em>Impact:</em> straighter paths / fewer steps without reflow's fidelity loss — cost is an assignment solve per minibatch
+      (Hungarian, or an approximate Sinkhorn step), a modest overhead.</li>
+  <li><strong>Guidance &amp; exact likelihood need extra care.</strong>
+      <em>What:</em> two things that are clean in diffusion cost more here. <em>Why — CFG:</em> guidance is applied to the <em>velocity</em>
+      \(u_\varnothing+w(u_y-u_\varnothing)\); it works, but the geometry differs slightly from score‑CFG, so the scale \(w\) needs retuning. <em>Why —
+      likelihood:</em> an exact log‑likelihood needs \(\int\nabla\!\cdot u\,dt\) along the ODE (the 5.2 footnote) — a trace/Jacobian per step (or a stochastic
+      Hutchinson estimate), which is expensive. <em>Impact:</em> FM isn't a drop‑in for every diffusion recipe; guidance tuning and exact‑likelihood eval both
+      cost more.</li>
+</ul>
+</div>
+
+<h4>5.8 The unification (how the course closes the loop)</h4>
+<p>The lecture ends by lining up all three paradigms in one table — worth memorizing because it shows they're the same object seen
+three ways:</p>
+<table>
+<tr><th></th><th>Forward process</th><th>Network learns</th><th>Deterministic sampler</th></tr>
+<tr><td>Discrete diffusion (DDPM)</td><td>\(x_t=\sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\,\varepsilon\)</td><td>noise \(\varepsilon_\theta\)</td><td><strong>DDIM</strong> (drop the noise term)</td></tr>
+<tr><td>Score‑based SDE</td><td>\(dx=f(x,t)dt+g(t)dW\)</td><td>score \(\nabla\log p_t\)</td><td><strong>PF‑ODE</strong> (drop the \(g\,dW\))</td></tr>
+<tr><td><strong>Flow matching</strong></td><td>\(x_t=(1-t)x_0+t\,x_1\)</td><td>velocity \(u_t^\theta\)</td><td><strong>already deterministic</strong> \(\dot x=u_t(x)\)</td></tr>
+</table>
+<p class="fn">DDIM and the PF‑ODE are the "remove the stochastic term" counterparts of their SDEs; flow matching is <em>born</em> deterministic.
+The framework that formally contains all three is <strong>Stochastic Interpolants</strong> (Albergo et al., 2023).</p>
+
+<!-- ============================================================ 6 GUIDANCE -->
+<h2 id="guidance"><span class="n">6</span>Guidance — steering toward a class, text, or image</h2>
+<p>Everything so far samples the <em>unconditional</em> \(p(x)\). Guidance samples a <em>conditional</em> \(p(x\mid y)\) where \(y\) is a
+class, prompt, or (in practice) a CLIP embedding. This section follows the derivation as taught in the course (Dhariwal 2021 for
+classifier guidance; Ho &amp; Salimans 2022 for classifier‑free). Notation: condition \(y\), guidance scale \(w\), generation weights
+\(\theta\), classifier weights \(\phi\), null token \(\varnothing\).</p>
+
+<h4>6.1 Classifier guidance — the score decomposition, derived</h4>
+<p><strong>Goal:</strong> sample the <em>conditional</em> reverse step \(p(x_t\mid x_{t+1},y)\) (here \(x_{t+1}\) is the noisier step,
+\(x_t\) the cleaner one we produce), reusing a diffusion model you already have plus a small classifier. Every line is shown — nothing
+assumed clear.</p>
+
+<p><strong>Step 1 — Bayes on the reverse step, in full.</strong> Start from the definition of a conditional and split the joint the other way:</p>
+<div class="eq">$$p(x_t\mid x_{t+1},y)=\frac{p(x_t,y\mid x_{t+1})}{p(y\mid x_{t+1})}=\frac{p(y\mid x_t,x_{t+1})\,p(x_t\mid x_{t+1})}{p(y\mid x_{t+1})}.$$</div>
+<p>Two simplifications turn this into something you can compute:</p>
+<ul>
+  <li><strong>The denominator is constant in \(x_t\).</strong> \(p(y\mid x_{t+1})\) contains no \(x_t\), so as a function of \(x_t\) it's just a normaliser — absorb it into "\(\propto\)".</li>
+  <li><strong>\(p(y\mid x_t,x_{t+1})=p(y\mid x_t)\).</strong> \(x_{t+1}\) is only a <em>noisier</em> copy of \(x_t\); once you know the cleaner \(x_t\), the noisier \(x_{t+1}\) adds no information about the label (data‑processing / Markov). So the label reads the cleaner image only.</li>
+</ul>
+<div class="eq">$$\boxed{\;p(x_t\mid x_{t+1},y)\ \propto\ \underbrace{p_\theta(x_t\mid x_{t+1})}_{\text{diffusion model (generator)}}\cdot\underbrace{p_\phi(y\mid x_t)}_{\text{classifier on noisy }x_t}\;}$$</div>
+
+<p><strong>Step 2 — the same fact as a score identity (take \(\log\), then \(\nabla_{x_t}\)).</strong> Write Bayes in log form:
+\(\log p(x_t\mid x_{t+1},y)=\log p_\theta(x_t\mid x_{t+1})+\log p_\phi(y\mid x_t)-\log p(y\mid x_{t+1})\). The last term has no \(x_t\), so
+\(\nabla_{x_t}\) kills it:</p>
+<div class="eq">$$\nabla_{x_t}\log p(x_t\mid x_{t+1},y)=\underbrace{\nabla_{x_t}\log p_\theta(x_t\mid x_{t+1})}_{\text{unconditional score}}+\underbrace{\nabla_{x_t}\log p_\phi(y\mid x_t)}_{\text{classifier gradient}}.$$</div>
+<p>That is the whole idea in one line: <em>conditional score = unconditional score + classifier gradient.</em> Steps 3–4 just turn it into the concrete Gaussian update the sampler runs.</p>
+
+<p><strong>Step 3 — write the two log‑terms explicitly.</strong> Abbreviate the generator's mean \(\mu:=\mu_\theta(x_{t+1})\) and variance \(\sigma^2:=\sigma_{t+1}^2\).</p>
+<ul>
+  <li><em>Generator</em> — the DDPM Gaussian from §1: \(\displaystyle \log p_\theta(x_t\mid x_{t+1})=-\frac{\lVert x_t-\mu\rVert^2}{2\sigma^2}+\text{const}.\)</li>
+  <li><em>Classifier</em> — no closed form, but the generator Gaussian is sharply peaked at \(\mu\), so we only need \(\log p_\phi\) <em>near</em> \(\mu\). Taylor‑expand to first order about \(x_t=\mu\):
+  <div class="eq">$$\log p_\phi(y\mid x_t)\approx \log p_\phi(y\mid\mu)+(x_t-\mu)^\top g,\qquad g:=\nabla_{x_t}\log p_\phi(y\mid x_t)\big|_{x_t=\mu}.$$</div>
+  (A constant \(+\) a linear ramp — the same "thin peak sees only a straight ramp of the other factor" move as §1's spotlight.)</li>
+</ul>
+
+<p><strong>Step 4 — add the logs and complete the square (no skips).</strong> Let \(u:=x_t-\mu\). Add the two logs:</p>
+<div class="eq">$$\log\big[p_\theta\,p_\phi\big]=-\frac{\lVert u\rVert^2}{2\sigma^2}+u^\top g+\text{const}.$$</div>
+<p>Factor \(-\tfrac{1}{2\sigma^2}\) out of the \(u\)-terms, then complete the square using \(\lVert u\rVert^2-2\sigma^2 u^\top g=\lVert u-\sigma^2 g\rVert^2-\sigma^4\lVert g\rVert^2\):</p>
+<div class="eq">$$-\frac{1}{2\sigma^2}\big(\lVert u\rVert^2-2\sigma^2 u^\top g\big)=-\frac{\lVert u-\sigma^2 g\rVert^2}{2\sigma^2}+\underbrace{\frac{\sigma^2\lVert g\rVert^2}{2}}_{\text{no }u\ \Rightarrow\ \text{into const}}.$$</div>
+<p>So the log is \(-\lVert u-\sigma^2 g\rVert^2/(2\sigma^2)+\text{const}\) — a Gaussian in \(u=x_t-\mu\) centered at \(\sigma^2 g\). Undo the shift (\(x_t=\mu+u\)):</p>
+<div class="eq">$$\boxed{\;x_t\ \sim\ \mathcal N\!\Big(\ \mu_\theta+\sigma_{t+1}^2\,\nabla_{x_t}\log p_\phi(y\mid\mu_\theta),\ \ \sigma_{t+1}^2 I\ \Big)\;}$$</div>
+<p>Same width \(\sigma_{t+1}^2\); the mean is pushed by \(\sigma_{t+1}^2\) <em>along the classifier gradient</em> — a nudge toward regions the classifier calls "\(y\)." This is exactly the Step‑2 identity, now realised inside the sampler.</p>
+
+<p><strong>Step 5 — where the guidance scale \(w\) comes from.</strong> The derivation above gives coefficient <em>exactly 1</em> — honest Bayesian conditioning. In practice that pull is too weak, so you <em>amplify</em> the classifier term by a scale \(w\):</p>
+<div class="eq">$$\text{mean}=\mu_\theta+\,w\,\sigma_{t+1}^2\,\nabla_{x_t}\log p_\phi(y\mid\mu_\theta)\qquad\Longleftrightarrow\qquad \text{replace } p_\phi(y\mid x_t)\ \text{by}\ p_\phi(y\mid x_t)^{\,w}\ \text{in Step 1}.$$</div>
+<p>Raising the classifier to the power \(w\) sharpens it (mass piles onto the most confidently‑\(y\) regions), so \(w>1\) trades diversity for stronger class adherence; \(w{=}1\) is pure Bayes, \(w{=}0\) is unconditional. So \(w\) is a deliberate knob bolted on <em>after</em> the derivation — the math itself produced \(w{=}1\).</p>
+
+<ul>
+  <li><strong>No retraining of the generator</strong> — pure sampling technique.</li>
+  <li><strong>But</strong> the classifier must be trained (cross‑entropy) on <em>noisy</em> images \(x_t\) at every noise level — an off‑the‑shelf classifier won't do — plus an extra classifier forward+backward pass per step, and \(w\) needs tuning. Those three costs are exactly what CFG (6.2) removes.</li>
+</ul>
+
+<h4>6.2 Classifier‑free guidance (CFG) — the default everywhere</h4>
+<p>Refined goal: get the same effect with <strong>generation weights only</strong> (no classifier on noisy data, no extra model).</p>
+<div class="box key">
+<span class="tag">The implicit classifier — derived in three steps</span>
+<p><strong>Step 1 — a classifier is hiding inside the two generators (Bayes again).</strong> By Bayes,
+\(p(y\mid x_t)=\dfrac{p(x_t\mid y)\,p(y)}{p(x_t)}\). Take \(\log\) then \(\nabla_{x_t}\); the \(\nabla_{x_t}\log p(y)\) term is zero (no
+\(x_t\) in it):</p>
+<div class="eq">$$\nabla_{x_t}\log p(y\mid x_t)=\nabla_{x_t}\log p(x_t\mid y)-\nabla_{x_t}\log p(x_t).$$</div>
+<p>So the classifier gradient 6.1 needed is just <strong>conditional score − unconditional score</strong> — and you can get both scores
+from one network, no classifier trained at all.</p>
+<p><strong>Step 2 — substitute into classifier guidance.</strong> 6.1's guided (conditional) score, with scale \(w\), was
+\(\nabla\log p(x_t)+w\,\nabla\log p(y\mid x_t)\). Drop in Step 1:</p>
+<div class="eq">$$s_{\text{guided}}=\nabla\log p(x_t)+w\big(\nabla\log p(x_t\mid y)-\nabla\log p(x_t)\big).$$</div>
+<p><strong>Step 3 — rewrite in \(\varepsilon\)-space.</strong> Predicted noise and score are one linear map apart,
+\(\varepsilon_\theta(x_t,\cdot)=-\sigma\,\nabla\log p(x_t,\cdot)\). Multiply the line above by \(-\sigma\), and name the two calls
+\(\varepsilon_\theta(x_t,\varnothing)=-\sigma\nabla\log p(x_t)\) (unconditional) and
+\(\varepsilon_\theta(x_t,y)=-\sigma\nabla\log p(x_t\mid y)\) (conditional):</p>
+<div class="eq">$$\boxed{\;\varepsilon_{\text{CFG}}(x_t,y)=\varepsilon_\theta(x_t,\varnothing)+w\big(\varepsilon_\theta(x_t,y)-\varepsilon_\theta(x_t,\varnothing)\big)\;}$$</div>
+<p>One network, called twice — once with the condition \(y\), once with the null token \(\varnothing\) — <em>reconstructs the classifier
+gradient with no classifier.</em> That is the whole trick, and it is why CFG needs only generation weights.</p>
+</div>
+<p><strong>Training:</strong> train a single \(\varepsilon_\theta(x_t,t,y)\) but with <strong>condition dropout</strong> — replace \(y\)
+with \(\varnothing\) with probability \(p_{\text{uncond}}\) (best \(10\text{–}20\%\)). The same weights then give both scores.</p>
+<div class="box pink">
+<span class="tag">The geometry (the one diagram to remember)</span>
+<p>On a line: start at the <em>unconditional</em> prediction \(\varepsilon_\theta(x_t,\varnothing)\), step toward the
+<em>conditional</em> one \(\varepsilon_\theta(x_t,y)\), and <strong>extrapolate past it</strong> by factor \(w\). \(w{=}1\) lands exactly
+on the conditional sample; \(w{>}1\) overshoots — amplifying prompt adherence at the cost of diversity, and if pushed too far, pushing
+samples out of distribution (over‑saturation, artifacts). Typical \(w\approx3\text{–}8\) for images. Cost: still <strong>two forward
+passes per step</strong>.</p>
+</div>
+<p class="fn">CFG modifies the network's <em>output</em> before each reverse step, so it works unchanged with DDPM, DDIM, EDM, or flow —
+see §7.</p>
+
+<!-- ============================================================ 7 guidance in score/flow -->
+<h2 id="guidance-score-flow"><span class="n">7</span>Guidance in score‑based &amp; flow‑matching models</h2>
+<p>Because "predict noise", "predict score", and "predict velocity" are the same information (Fact 2), guidance transfers to all of
+them by editing whatever the network outputs.</p>
+
+<h4>7.1 Score‑based models — guidance <em>is</em> score addition</h4>
+<p>Here guidance is at its most literal. The guided score is just:</p>
+<div class="eq">$$s_{\text{guided}}(x,y)=\nabla\log p(x)+w\,\big(\underbrace{\nabla\log p(x\mid y)-\nabla\log p(x)}_{\text{implicit classifier / classifier gradient}}\big).$$</div>
+<p>Classifier guidance adds an explicit \(\nabla\log p(y\mid x)\); CFG builds the same term from conditional − unconditional scores.
+You then run the <em>same</em> Langevin/SDE/ODE sampler on \(s_{\text{guided}}\) instead of \(s\). Nothing else changes — guidance and
+the sampler are orthogonal.</p>
+
+<h4>7.2 Flow matching — guide the velocity</h4>
+<p>Train the velocity field with condition dropout exactly like CFG, then combine at sampling time:</p>
+<div class="eq">$$u_{\text{CFG}}(x,t,y)=u_\theta(x,t,\varnothing)+w\big(u_\theta(x,t,y)-u_\theta(x,t,\varnothing)\big),\qquad\text{integrate } \dot x=u_{\text{CFG}}.$$</div>
+<p>This is exactly how SD3 / Flux do text guidance. But <em>why</em> is guiding the velocity the same as guiding the score we derived in §6–7.1?
+It rests on one fact: <strong>velocity is an <em>affine</em> function of the score, with condition‑independent coefficients.</strong> Here it is, derived.</p>
+
+<div class="box key">
+<span class="tag">Why velocity‑CFG = score‑CFG — derived in two steps</span>
+<p><strong>Step 1 — the velocity↔score relation, derived slowly.</strong> Take the Gaussian path \(x_t=\alpha_t x_1+\sigma_t x_0\) with noise
+\(x_0\sim\mathcal N(0,I)\) and data \(x_1\) (rectified flow: \(\alpha_t=t,\ \sigma_t=1-t\)). The plan: write <em>both</em> the velocity and the score
+as conditional expectations of the two unknowns \(\mathbb E[x_1\mid x]\) and \(\mathbb E[x_0\mid x]\), then eliminate those two unknowns.</p>
+<p><strong>(a) Velocity = posterior mean of the conditional velocity.</strong> Differentiate the path in \(t\):
+\(\dot x_t=\dot\alpha_t x_1+\dot\sigma_t x_0\). By the §5.3 marginalization, the marginal field is that quantity's posterior mean:</p>
+<div class="eq">$$u_t(x)=\mathbb E[\dot x_t\mid x_t{=}x]=\dot\alpha_t\,\mathbb E[x_1\mid x]+\dot\sigma_t\,\mathbb E[x_0\mid x].$$</div>
+<p><strong>(b) Score = −(expected noise)/\(\sigma_t\) (Tweedie).</strong> For <em>any</em> "signal + Gaussian noise" law \(x=\mu+\sigma z\), the score is
+\(\nabla\log p(x)=-\mathbb E[z\mid x]/\sigma\) — the same denoising identity used in §1/§3. Here \(z=x_0,\ \sigma=\sigma_t\):</p>
+<div class="eq">$$s_t(x):=\nabla\log p_t(x)=-\tfrac{1}{\sigma_t}\,\mathbb E[x_0\mid x]\ \ \Longrightarrow\ \ \mathbb E[x_0\mid x]=-\sigma_t\,s_t(x).$$</div>
+<p><strong>(c) A consistency equation.</strong> Take \(\mathbb E[\,\cdot\mid x_t{=}x]\) of the path itself; since \(\mathbb E[x_t\mid x_t{=}x]=x\):</p>
+<div class="eq">$$x=\alpha_t\,\mathbb E[x_1\mid x]+\sigma_t\,\mathbb E[x_0\mid x].$$</div>
+<p><strong>(d) Solve for the two expectations.</strong> Put (b)'s \(\mathbb E[x_0\mid x]=-\sigma_t s_t\) into (c):</p>
+<div class="eq">$$x=\alpha_t\,\mathbb E[x_1\mid x]-\sigma_t^2 s_t\ \ \Longrightarrow\ \ \mathbb E[x_1\mid x]=\frac{x+\sigma_t^2 s_t}{\alpha_t}.$$</div>
+<p><strong>(e) Substitute both back into (a):</strong></p>
+<div class="eq">$$u_t(x)=\dot\alpha_t\cdot\frac{x+\sigma_t^2 s_t}{\alpha_t}+\dot\sigma_t(-\sigma_t s_t)
+=\underbrace{\tfrac{\dot\alpha_t}{\alpha_t}}_{a_t}\,x+\underbrace{\Big(\tfrac{\dot\alpha_t}{\alpha_t}\sigma_t^2-\dot\sigma_t\sigma_t\Big)}_{b_t}\,s_t(x).$$</div>
+<p>So \(u_t=a_t x+b_t s_t\) — <strong>affine in the score</strong>, with \(a_t,b_t\) depending <em>only</em> on the schedule \((\alpha_t,\sigma_t)\),
+<strong>not</strong> on the condition \(y\). Concretely for rectified flow (\(\alpha_t=t,\ \sigma_t=1-t\)): \(a_t=\tfrac1t,\ b_t=\tfrac{1-t}{t}\), i.e.
+\(u_t(x)=\tfrac1t\,x+\tfrac{1-t}{t}\,s_t(x)\) — one clean line turning the score into the velocity.</p>
+<p><strong>Step 2 — the affine map makes the two CFGs identical.</strong> Both calls share \(a_t,b_t\); only the score differs, so:</p>
+<div class="eq">$$\begin{aligned}
+u_{\text{CFG}}&=u(x\mid\varnothing)+w\big(u(x\mid y)-u(x\mid\varnothing)\big)\\
+&=\big[a_t x+b_t s(x\mid\varnothing)\big]+w\,b_t\big(s(x\mid y)-s(x\mid\varnothing)\big)\\
+&=a_t x+b_t\underbrace{\big[s(x\mid\varnothing)+w(s(x\mid y)-s(x\mid\varnothing))\big]}_{=\,s_{\text{CFG}}}=a_t x+b_t\,s_{\text{CFG}}(x).
+\end{aligned}$$</div>
+<p>So guiding the velocities gives <em>exactly</em> the affine map applied to the guided score. Why it goes through: the \(a_t x\) term is the
+<em>same</em> for conditional and unconditional, so it <strong>cancels</strong> in the difference \(u(y)-u(\varnothing)\); the \(b_t\) factor is the
+same for both, so it <strong>factors out</strong>. In words: <em>CFG only uses "uncond \(+\,w(\)cond\(-\)uncond\()\)", and the score→velocity
+conversion is affine with condition‑independent coefficients, so the conversion commutes with that linear combination.</em></p>
+<p class="hint">The "CFG behaves a little differently on velocities" caveat (5.7 issues) is <em>practical</em>, not structural: since \(s\) and \(u\) have
+different scales across \(t\), a fixed \(w\) can feel stronger/weaker at different noise levels, so \(w\) often needs retuning between the two
+parametrizations. The extrapolation <em>form</em> is identical, as shown.</p>
+</div>
+<p>So the extrapolation picture from §6.2 carries over exactly — you're pushing the transport direction further toward the conditioned target.</p>
+<div class="box key"><span class="tag">The unifying statement</span>
+<p><strong>Guidance = take the network's output, add \(w\times\)(conditional − unconditional), integrate as usual.</strong> Whether the
+output is \(\varepsilon\), a score, or a velocity, and whether the sampler is an SDE or an ODE, the recipe is identical. That's why
+you learn it once.</p></div>
+
+<!-- ============================================================ 8 best guidance -->
+<h2 id="guidance-best"><span class="n">8</span>Is CFG the best? Best‑practice guidance today</h2>
+<p>CFG is still the workhorse in every open text‑to‑image/video model — but "plain CFG at a fixed scale" is <em>not</em> the frontier
+anymore. What's actually used now:</p>
+<table>
+<tr><th>Technique</th><th>What it fixes</th><th>The idea</th></tr>
+<tr><td><strong>Guidance interval</strong> <span class="pill">Kynkäänniemi 2024</span></td><td>high \(w\) wrecks the very noisy and very clean steps</td><td>apply CFG only in a <em>middle</em> band of noise levels; \(w{=}1\) at the ends. Big FID win for free.</td></tr>
+<tr><td><strong>CFG rescaling / dynamic thresholding</strong> <span class="pill">Imagen, SDXL</span></td><td>high \(w\) over‑saturates colors</td><td>rescale the guided prediction back to the unconditional std, or clip percentiles, to keep contrast sane.</td></tr>
+<tr><td><strong>Autoguidance</strong> <span class="pill">Karras 2024</span></td><td>CFG hurts diversity because \(\varnothing\) is a bad "bad model"</td><td>guide with a <em>smaller/less‑trained copy of the same model</em> instead of the unconditional branch. State‑of‑the‑art FID; decouples quality from conditioning.</td></tr>
+<tr><td><strong>CFG++</strong> <span class="pill">Chung 2024</span></td><td>high \(w\) pushes \(\hat x_0\) off‑manifold → artifacts &amp; broken inversion</td><td>keep the guided step <em>direction</em> but re‑noise from the on‑manifold <em>conditional</em> anchor; bounded knob \(\lambda\in[0,1]\). Full explanation below.</td></tr>
+<tr><td><strong>Negative prompts</strong> <span class="pill">practice</span></td><td>you want to push <em>away</em> from something</td><td>replace \(\varnothing\) with an explicit "bad" condition \(y^-\): \(\varepsilon(y^-)+w(\varepsilon(y)-\varepsilon(y^-))\).</td></tr>
+<tr><td><strong>Guidance distillation</strong> <span class="pill">SDXL‑Turbo, LCM, Flux‑schnell</span></td><td>CFG doubles inference cost (two passes/step)</td><td>distill the guided output into a <em>single</em> network pass, often together with step‑distillation → 1–4 step models.</td></tr>
+</table>
+
+<div class="box key">
+<span class="tag">The one problem they all attack — and how each does it</span>
+<p>Every technique above is fixing the <em>same</em> flaw. CFG at high \(w\) buys prompt adherence by <strong>extrapolating away from the
+unconditional baseline</strong>, \(\varepsilon_\varnothing+w(\varepsilon_y-\varepsilon_\varnothing)\) — but that same over‑extrapolation does three
+ugly things: it <strong>inflates the prediction's magnitude</strong> (colors blow out / over‑saturate), it <strong>collapses diversity</strong>
+(shoves samples toward the data's average / mode), and it <strong>only helps at some noise levels</strong>. Each method targets one of those:</p>
+<ul>
+  <li><strong>Guidance interval</strong> — targets <em>"only helps at some noise levels."</em> Apply \(w>1\) only in a <em>middle</em> band of noise;
+  use \(w{=}1\) at the ends. Why: at very high noise everything is blurry, so strong guidance just amplifies coarse errors; at very low noise the image
+  is nearly finished, so it over‑sharpens/saturates fine detail. The steering that matters is mid‑noise, where the <em>content</em> is decided. Gating
+  \(w\) by \(t\) is a big FID win for almost no cost.</li>
+  <li><strong>CFG rescaling / dynamic thresholding</strong> — targets <em>magnitude inflation.</em> After forming the guided prediction, rescale it so its
+  per‑image std matches the unconditional (or clip extreme percentiles). Restores sane contrast so you can keep a high \(w\) without the "deep‑fried" look.</li>
+  <li><strong>Autoguidance</strong> — targets <em>diversity collapse</em>, by fixing the <em>baseline itself</em> (details below).</li>
+  <li><strong>Negative prompts</strong> — generalize the baseline: replace \(\varnothing\) with a chosen "bad" condition \(y^-\)
+  (\(\varepsilon(y^-)+w(\varepsilon(y)-\varepsilon(y^-))\)), so you actively push <em>away</em> from named junk ("blurry, extra fingers").</li>
+  <li><strong>Guidance distillation</strong> — targets <em>the 2× cost</em>: CFG needs a conditional <em>and</em> unconditional pass every step; train one
+  network pass to reproduce the guided output, often fused with step‑distillation → 1–4‑step models (SDXL‑Turbo, LCM, Flux‑schnell).</li>
+</ul>
+<p><strong>Autoguidance (Karras 2024), in full — because it's the subtle one.</strong> <em>Why CFG hurts diversity:</em> the unconditional \(\varnothing\)
+differs from the conditional in <em>two</em> ways at once — it lacks the prompt <em>and</em> it models a broader distribution — so extrapolating away from
+it over‑corrects: you amplify prompt adherence but also drag samples toward the data mode, killing variety and saturating color. \(\varnothing\) is a bad
+"worse version of the task." <em>The fix:</em> guide with a <strong>deliberately weaker copy of the same conditional model</strong> — a smaller net, or an
+earlier/under‑trained checkpoint, <em>with the same prompt</em>: \(u_{\text{good}}+w\,(u_{\text{good}}-u_{\text{bad}})\). Because the bad model makes the
+<em>same kinds</em> of mistakes as the good one, only more, the difference \((u_{\text{good}}-u_{\text{bad}})\) isolates the pure <em>competence</em>
+direction — the errors your model already half‑fixed — with <em>no</em> distribution shift. Extrapolating along it raises quality <strong>without</strong>
+the diversity/saturation tax. <em>When it beats CFG / use cases:</em> when the target is raw sample <strong>quality / FID</strong> — benchmarks, research,
+high‑end generation — because it decouples "make it better" from "make it more on‑prompt," which CFG fatally conflates (it set SOTA FID on ImageNet). Cost:
+you need a "bad twin," but an early training checkpoint or a small model suffices — cheap. It's not yet the default in shipped text‑to‑image (those still
+lean on CFG + interval/rescale, or distillation), largely because of that extra‑model bookkeeping.</p>
+</div>
+
+<div class="box key">
+<span class="tag">The density each guidance rule actually samples — one lemma, two instances</span>
+<p>Every rule here has the shape <em>anchor + weight × (target − anchor)</em>. One derivation covers them all and shows exactly why CFG taxes diversity and autoguidance doesn't. Write \(D\) for the network output (an \(\varepsilon\), a velocity \(u\), or a denoiser): each is \(\propto-\sigma_t\nabla\!\log p\) of whatever distribution that branch learned, so a linear combination of outputs <em>is</em> the same linear combination of scores — the \(-\sigma_t\) multiplies every term and cancels.</p>
+<div class="eq">$$\tilde D=D_A+w\,(D_B-D_A)\ \Longrightarrow\ \nabla\!\log\tilde p=\nabla\!\log p_A+w\,\nabla\!\log\frac{p_B}{p_A}\ \Longrightarrow\ \boxed{\ \tilde p\ \propto\ p_A\!\left(\frac{p_B}{p_A}\right)^{\!w}=\,p_A^{\,1-w}\,p_B^{\,w}\ }$$</div>
+<p>(The middle step integrates the gradient back up in \(x\); \(\nabla\log p(c)\)‑type constants vanish because they don't depend on \(x\).) Now plug in the two anchors:</p>
+<ul>
+  <li><strong>CFG</strong> — anchor \(A=\varnothing\) (unconditional), target \(B=y\) (conditional). The ratio <em>is</em> the classifier posterior:
+      <div class="eq">$$\frac{p_B}{p_A}=\frac{p(x\mid c)}{p(x)}=\frac{p(c\mid x)}{p(c)}\propto p(c\mid x)\quad\Rightarrow\quad \tilde p\propto p(x)\,\big[p(c\mid x)\big]^{w}.$$</div>
+      Neutral at \(w{=}1\) (pure conditional). <strong>The exponent lands on \(p(c\mid x)\)</strong> — raising a posterior to a power \(>1\) shrinks its entropy and piles mass onto the \(x\) the classifier is <em>most sure</em> is class \(c\): the class‑prototypical, exaggerated, over‑saturated examples. That's the diversity/saturation tax, read straight off the formula.</li>
+  <li><strong>Autoguidance</strong> — anchor \(A=\text{bad}\), target \(B=\text{good}\), <em>both conditioned on the same \(c\)</em>:
+      <div class="eq">$$\tilde p\propto p_{\text{bad}}\!\left(\frac{p_{\text{good}}}{p_{\text{bad}}}\right)^{\!w}=\,p_{\text{good}}\!\left(\frac{p_{\text{good}}}{p_{\text{bad}}}\right)^{\!w-1}.$$</div>
+      Neutral at \(w{=}1\) (pure good model). <strong>Same operation</strong> — temper a ratio by an exponent — but the base is now a <em>quality ratio</em> of two <em>same‑class</em> densities. It spikes where the good model has structure the bad one missed (fine detail, sharp edges, correct anatomy), <em>not</em> at the class centroid; and because both are trained on the same conditional data their <em>supports match</em>, so tempering sharpens fidelity without shoving samples toward a narrower distribution. No diversity tax. <span class="muted">(Some papers anchor on the good model, \(u_{\text{good}}+w'(u_{\text{good}}-u_{\text{bad}})\) — identical field with \(w'=w-1\).)</span></li>
+</ul>
+<p><strong>The whole story in one line:</strong> both rules do the <em>same</em> thing — exponentiate a ratio — and differ <em>only</em> in the base. CFG's base is \(p(c\mid x)\), which peaks at the class mode → kills variety; autoguidance's base is \(p_{\text{good}}/p_{\text{bad}}\), which peaks at "fine detail the weak model missed" → raises quality only. So yes, there <em>is</em> a "\(w\) power" in autoguidance too — it's just applied to a benign quantity.</p>
+</div>
+
+<div class="box key">
+<span class="tag">The "bad twin" — what Karras 2024 actually degraded, and the one trap</span>
+<p><strong>What they used (not every knob at once).</strong> The bad model \(D_{\text{bad}}\) was the <em>same</em> model degraded along a <em>small, compatible</em> set of axes — chiefly <strong>less capacity</strong> (a smaller net) <em>and</em> <strong>less training</strong> (fewer iterations, or an earlier checkpoint of the same run); they also tested adding input noise / dropout. Same data, same architecture family, same conditioning \(c\). The record‑setting ImageNet FID used a twin that was <em>both</em> smaller and trained less. The rule they landed on: the degradations must be <em>compatible</em> — they make the twin <strong>worse at the same task</strong>, not <strong>broken in a different way</strong>.</p>
+<p><strong>Why "compatible" is the whole game (the part that wasn't clear).</strong> The guidance direction is \(D_{\text{good}}-D_{\text{bad}}\). That difference is a clean "make it better" arrow <em>only if</em> the two models are doing the identical job and one is simply weaker — then subtracting cancels everything they agree on and leaves exactly the competence the good model added. If instead the twin differs in <em>kind</em> — different architecture, different conditioning, different training data — the subtraction no longer cancels cleanly: \(D_{\text{good}}-D_{\text{bad}}\) mixes "more competent" with "different task," and extrapolating along it drags samples toward whatever the twin <em>uniquely</em> lacks (a garbage direction) → artifacts. <strong>So the rule is: degrade only along axes your good model is already limited by; never add a new, orthogonal weakness.</strong> An <em>earlier EMA snapshot of the same run</em> is the safest and cheapest twin — by construction it's the same model, just less trained, so \(D_{\text{good}}-D_{\text{bad}}\) is pure competence.</p>
+</div>
+
+<div class="box warn">
+<span class="tag">CFG++ — and why swapping in a different \(\varepsilon\) doesn't "break the math"</span>
+<p><strong>First, a correction to the table above's old label:</strong> CFG++ is <em>not</em> the same as CFG‑rescaling/dynamic‑thresholding (they're often lumped together). Rescaling post‑scales the guided output's magnitude; <strong>CFG++ changes the sampler update itself.</strong> Recall a DDIM step has three pieces:</p>
+<div class="eq">$$\underbrace{\varepsilon=\varepsilon_\theta(x_t)}_{\text{(1) predict noise}}\qquad \underbrace{\hat x_0=\frac{x_t-\sigma_t\varepsilon}{\alpha_t}}_{\text{(2) clean anchor}}\qquad \underbrace{x_{t-1}=\alpha_{t-1}\hat x_0+\sigma_{t-1}\varepsilon}_{\text{(3) re‑noise to next level}}$$</div>
+<p><strong>What breaks in plain CFG.</strong> It plugs the extrapolated \(\tilde\varepsilon=\varepsilon_\varnothing+w(\varepsilon_y-\varepsilon_\varnothing)\) into <em>both</em> (2) and (3). At high \(w\) that \(\tilde\varepsilon\) is an over‑shoot, so the clean anchor \(\hat x_0\) becomes an over‑sharpened, over‑saturated image that no real photo looks like — it's <strong>off the data manifold</strong>. Every step re‑noises from that bad anchor, compounding the error; and because the field isn't invertible, <em>DDIM inversion</em> (running the sampler backward to recover the noise latent of a real image so you can edit it) drifts.</p>
+<p><strong>What CFG++ does.</strong> Use the guided \(\tilde\varepsilon\) only to decide <em>where / how far to step</em>, but take the clean anchor \(\hat x_0\) in (2) from the <em>(near‑)conditional</em> denoiser — a genuine denoiser output, hence an on‑manifold, plausible image — with a <strong>bounded</strong> knob \(\lambda\in[0,1]\) instead of an unbounded \(w\). Every intermediate \(\hat x_0\) stays a real‑looking image, so trajectories don't deep‑fry and inversion stays stable.</p>
+<p><strong>Now your actual question — doesn't using a "wrong" \(\varepsilon\) break the math?</strong> The honest answer: <em>all</em> guidance is already a heuristic. The guided field \(\tilde\varepsilon(x,t)\) is <strong>not</strong> the exact score of any single normalized distribution consistent across all noise levels — CFG only <em>approximately</em> samples \(p(x)p(c\mid x)^w\). So there is <strong>no "right" \(\varepsilon\)</strong> once you decide to guide; the sampler just integrates whatever vector field you hand it, and the "right" \(\varepsilon_\theta(x,c)\) is only right for the <em>unguided</em> conditional. Given that, CFG++ is arguably <em>more</em> correct, not less: because the conditional denoiser produces a valid clean image, re‑noising from it never leaves the manifold, whereas the extrapolated anchor does. You're not corrupting a sound derivation — you're choosing the tilt whose <em>every intermediate estimate is still a plausible image</em>.</p>
+<p class="muted"><strong>Jargon used above:</strong> <strong>T2I</strong> = text‑to‑image (SD/SDXL, FLUX, Imagen…). <strong>EDM2</strong> = Karras 2024's class‑conditional ImageNet diffusion line — the "research models where you own the whole training stack," where autoguidance was demonstrated. <strong>Inversion / editing</strong> = take a <em>real</em> photo, run the sampler backward to its noise latent, change the prompt, re‑denoise → an edited version; this needs an invertible, on‑manifold sampler, which is exactly where CFG++ (and modest \(w\)) matter.</p>
+</div>
+
+<div class="box key">
+<span class="tag">What to actually do — a decision list</span>
+<ol>
+  <li><strong>Default — plain CFG.</strong> Train with condition dropout \(p_{\text{uncond}}\approx0.1\text{–}0.2\) (so one net learns <em>both</em> the
+  conditional and unconditional branch), sample with scale \(w\approx3\text{–}8\) for images (the raw conditional is too weak; \(w{>}1\) sharpens
+  adherence). This alone gets ~95% of the way.</li>
+  <li><strong>Over‑saturated at high \(w\)? Fix the symptom before lowering \(w\).</strong> Add CFG rescaling and/or a guidance interval <em>first</em> —
+  they remove the saturation/artifacts while <em>keeping</em> prompt adherence, whereas dropping \(w\) throws the adherence away.</li>
+  <li><strong>Chasing FID / max quality? Use autoguidance.</strong> It beats CFG precisely on the quality‑vs‑diversity frontier (no diversity collapse),
+  at the cost of maintaining a weak "bad twin" of your model. This is the "paper‑number" / high‑end‑quality choice, not the default production one.</li>
+  <li><strong>Need it fast? Distill the guidance.</strong> Fold the two‑pass guided output into a single network pass (often with step‑distillation), so
+  you're back to one forward per step and 1–4 steps total.</li>
+  <li><strong>Classifier guidance? Basically retired for text/image</strong> — the "train a classifier on <em>noisy</em> images at every level"
+  requirement killed it. It survives only where you genuinely have a differentiable <em>reward</em> or classifier you want to steer by (some scientific /
+  controllable‑generation / reward‑tilting settings).</li>
+</ol>
+</div>
+
+<!-- ============================================================ 9 ARCH -->
+<h2 id="arch"><span class="n">9</span>Where it lives: U‑Net vs ViT/DiT</h2>
+<p>Two things to inject: the condition <em>signal</em>, and <em>how</em> the backbone consumes it.</p>
+<table>
+<tr><th>Signal type</th><th>Example</th><th>How it's injected</th></tr>
+<tr><td><strong>Global / vector</strong></td><td>class, timestep, pooled prompt, CLIP image embedding</td><td>make a vector, add to the timestep embedding, modulate every block (scale/shift its norm)</td></tr>
+<tr><td><strong>Sequence / spatial</strong></td><td>per‑token text (T5/CLIP), another image's features</td><td><strong>cross‑attention</strong>: image features query, condition tokens are keys/values</td></tr>
+<tr><td><strong>Pixel‑aligned</strong></td><td>depth, edges, mask, reference image (ControlNet)</td><td><strong>concatenate</strong> on input channels, or add a parallel encoder branch</td></tr>
+</table>
+<p>Those three "how it's injected" cells are three <em>mechanisms</em> — and they're usually stated as jargon. Here is each one end‑to‑end, no hand‑waving; 9.1–9.2 then just say where they sit in a U‑Net vs a DiT.</p>
+
+<div class="box key">
+<span class="tag">Mechanism 1 — Modulation (adaLN‑Zero / adaGN), step by step</span>
+<p><strong>What it's for:</strong> inject a single <em>global</em> vector (timestep, class, pooled prompt) so it tilts the whole network — without adding any tokens.</p>
+<ol>
+  <li><strong>Build one condition vector \(c\).</strong> Embed the timestep (sinusoidal → MLP); embed the class / pooled text; <em>sum</em> them into \(c\in\mathbb R^d\).</li>
+  <li><strong>Per block, map \(c\) to modulation parameters.</strong> A small MLP: \(c\mapsto(\gamma,\beta,\alpha)\) for each normalized sub‑layer. (adaLN‑Zero emits six vectors per block — scale, shift, gate for the attention path, and again for the MLP path.)</li>
+  <li><strong>Normalize, then re‑inject scale &amp; shift.</strong> LayerNorm first strips each token's own mean/variance; modulation writes the condition's back in:
+  <div class="eq">$$h_{\text{mod}}=(1+\gamma)\odot\text{LayerNorm}(h)+\beta.$$</div>
+  \(\gamma\) sets each channel's gain, \(\beta\) its offset — both dictated by \(c\).</li>
+  <li><strong>Run the sub‑layer, then gate the residual.</strong> \(h\leftarrow h+\alpha\odot\text{SubLayer}(h_{\text{mod}})\), where SubLayer is the block's attention or MLP and \(\alpha\) is a per‑channel gate on its update.</li>
+  <li><strong>Zero‑init the gate.</strong> \(\alpha=0\) at start ⇒ \(h\leftarrow h\) (identity), so the network ignores the condition at init and <em>opens</em> the gates as it trains — the "‑Zero" that makes deep DiTs train stably.</li>
+</ol>
+<p><strong>How it works / impact:</strong> cheap (a few vectors per block, no new tokens) and it touches <em>every</em> block, so a global signal pervades the whole net; the zero‑init removes the early instability random modulation would cause. Intuition: normalization erases a feature's scale/offset, and the condition writes back "how loud, and where‑centered, each channel should be at this timestep." (A U‑Net does the identical thing to its GroupNorm — that's "adaGN.")</p>
+</div>
+
+<div class="box key">
+<span class="tag">Mechanism 2 — Cross‑attention, step by step</span>
+<p><strong>What it's for:</strong> inject a <em>variable‑length sequence</em> (per‑token text from T5/CLIP, or another image's features) so each image location can pull exactly the piece it needs.</p>
+<ol>
+  <li><strong>Two token sets.</strong> Flatten the \(H\times W\) feature map → \(N\) <em>image</em> tokens; take the \(M\) <em>condition</em> tokens (e.g. words).</li>
+  <li><strong>Project — this is what makes it "cross."</strong> Queries come from the <em>image</em>, keys and values from the <em>condition</em>:
+  <div class="eq">$$Q=X_{\text{img}}W_Q,\qquad K=X_{\text{cond}}W_K,\qquad V=X_{\text{cond}}W_V.$$</div></li>
+  <li><strong>Relevance scores.</strong> For image token \(i\) and condition token \(j\): \(s_{ij}=Q_i\!\cdot\!K_j/\sqrt d\) — "how relevant is word \(j\) to location \(i\)."</li>
+  <li><strong>Softmax over the condition.</strong> \(a_{ij}=\text{softmax}_j(s_{ij})\): each image location gets a distribution over the words.</li>
+  <li><strong>Blend the values.</strong> \(\text{out}_i=\sum_j a_{ij}\,V_j\) — location \(i\) pulls in a weighted mix of exactly the words it attended to.</li>
+  <li><strong>Residual add, in every block.</strong> \(X_{\text{img}}\leftarrow X_{\text{img}}+\text{out}\).</li>
+</ol>
+<p><strong>How it works / impact:</strong> handles any condition length (one word or 300) and is <em>spatially selective</em> — the region destined to become "a dog" attends to the token "dog." That per‑location selectivity is why text uses attention, not modulation. Cost: an \(N\times M\) attention per layer. <em>MM‑DiT variant (SD3 / Flux):</em> concatenate image + text into <em>one</em> sequence and run <em>self</em>‑attention over the union, so text also reads the image (two‑way), instead of image‑queries‑text (one‑way).</p>
+</div>
+
+<div class="box key">
+<span class="tag">Mechanism 3 — ControlNet, step by step (and how it fits every method)</span>
+<p><strong>What it's for:</strong> add a <em>pixel‑aligned</em> map (depth, Canny edges, pose, segmentation, a reference image) to an <em>already‑trained</em> model — precise spatial control, without retraining the base or damaging it.</p>
+<ol>
+  <li><strong>Freeze the pretrained denoiser</strong> (U‑Net or DiT). Its weights never change, so the base capability is protected.</li>
+  <li><strong>Clone its encoder.</strong> Make a <em>trainable copy</em> of the down‑blocks; this parallel branch will read the control.</li>
+  <li><strong>Feed the control in.</strong> Encode the control image with a small conv stem and add it at the copy's input.</li>
+  <li><strong>Run the copy</strong> → it produces features at each resolution, the <em>same shapes</em> as the frozen encoder's.</li>
+  <li><strong>Inject through zero‑convs.</strong> At each injection point, add \(\text{zeroconv}(\text{copy feature})\) into the frozen network's matching feature. The \(1\times1\) "zero convolution" is initialized to <strong>0</strong>.</li>
+  <li><strong>Zero‑init ⇒ safe start.</strong> At step 0 the zero‑convs output nothing, so ControlNet adds <em>zero</em> and the frozen model behaves exactly as before — no shock, no forgetting. Training gradually opens the zero‑convs, letting control features seep in.</li>
+  <li><strong>Train only the copy + zero‑convs</strong> on (control, image) pairs, using the <em>same</em> loss the base was trained with.</li>
+</ol>
+<p><strong>How it fits the methods (your question):</strong> ControlNet is <em>method‑agnostic</em>. It never touches the objective or the sampler — it only edits the denoiser's internal features, which still predict \(\varepsilon\) / \(x_0\) / velocity as before. So the identical recipe (freeze base → add trainable encoder copy → zero‑convs → train with the base's own loss) drops onto a <strong>DDPM</strong> U‑Net, an <strong>EDM</strong> model, or a <strong>flow‑matching</strong> DiT alike, and CFG still stacks on top. It's a conditioning <em>attachment</em>, orthogonal to the noise/velocity math — which is exactly why one idea serves all of §1–§5.</p>
+<p><strong>Impact:</strong> reuse a huge pretrained model, gain exact spatial control by training only a fraction of the parameters, suffer no catastrophic forgetting (zero‑init), and hot‑swap control types (a depth ControlNet, a pose ControlNet, …) on the same frozen base.</p>
+</div>
+
+<h4>9.1 In a U‑Net (SD 1.x/2; this repo's <code>unet.py</code>)</h4>
+<ul>
+  <li><strong>Timestep &amp; global condition:</strong> sinusoidal \(t\) embedding → MLP → added as a per‑channel bias in every
+  residual block. <em>Already in the repo</em> (<code>time_proj</code>); a class/text vector just sums into that same embedding.
+  Scaling/shifting the GroupNorm with it = "adaGN".</li>
+  <li><strong>Text prompt:</strong> add a <strong>cross‑attention</strong> layer in each block — flattened \(H\times W\) feature map
+  queries the text tokens. <em>The repo's U‑Net has no attention yet — this is the piece you'd add for text.</em></li>
+  <li><strong>Spatial (ControlNet):</strong> a trainable encoder copy injects control features via zero‑init convolutions.</li>
+</ul>
+
+<h4>9.2 In a DiT (transformer backbone — SD3, Flux, MIRA; <em>now in this repo</em>)</h4>
+<p>Patchify the (latent) image into tokens, run transformer blocks, unpatchify. Conditioning changes shape:</p>
+<ul>
+  <li><strong>Global condition — adaLN‑Zero (the DiT signature):</strong> map \((t,y_{\text{global}})\) through an MLP to produce, per
+  block, six vectors — scale &amp; shift for two LayerNorms plus two residual gates \(\alpha\):
+  <div class="eq">$$\text{modulate}(h)=(1+\gamma)\,\text{LayerNorm}(h)+\beta,\qquad h\leftarrow h+\alpha\cdot\text{Attn/MLP}(\cdot).$$</div>
+  The gates \(\alpha\) init to <strong>zero</strong> so each block starts as identity — that "adaLN‑Zero" init is why DiT trains
+  stably. It's the transformer analogue of the U‑Net's adaGN.</li>
+  <li><strong>Text / sequence condition:</strong> either <strong>cross‑attention</strong> (image tokens attend to text tokens), or
+  <strong>joint / MM‑DiT attention</strong> (SD3, Flux): concatenate image + text tokens into one sequence and run <em>self</em>‑attention
+  over the union, so both modalities read each other.</li>
+  <li><strong>Positional info:</strong> transformers have no built‑in geometry, so add positional embeddings (learned / sincos / RoPE)
+  to the patch tokens.</li>
+</ul>
+<div class="box repo"><span class="tag">In this repo (now implemented)</span>
+<p><code>models/dit.py</code> — patchify conv, learned positional embedding, adaLN‑Zero blocks with fused self‑attention, zero‑init
+final layer. It's a <strong>drop‑in for the U‑Net</strong>: <code>build_model()</code> switches on <code>model.name</code>, so
+<code>model.name: dit</code> is the <em>only</em> line that changes (see <code>configs/overfit_dit.yaml</code>). The current DiT does
+timestep conditioning (adaLN‑Zero); text cross‑attention is the natural next add.</p></div>
+
+<div class="box key">
+<span class="tag">The clean mental model</span>
+<p><strong>Global scalars</strong> (timestep, class, pooled prompt) → <em>modulate the normalization</em> (adaGN in U‑Net,
+adaLN‑Zero in DiT). <strong>Variable‑length sequences</strong> (text, another image) → <em>attention</em> (cross‑attention, or joint
+self‑attention in MM‑DiT). <strong>Pixel‑aligned maps</strong> → <em>concatenate / parallel branch</em>. Guidance strength (CFG) is
+orthogonal — it edits the <em>output</em>, so it's identical across backbones.</p>
+</div>
+
+<!-- ============================================================ 10 BEST PRACTICE -->
+<h2 id="best"><span class="n">10</span>Current best practice — the summary</h2>
+<p class="lead">If you were building an image/video diffusion model in 2025–2026, here is the consensus stack and <em>why</em> each choice
+won. This is the chapter to re‑read.</p>
+
+<table>
+<tr><th>Decision</th><th>Best practice now</th><th>Why</th></tr>
+<tr><td><strong>Objective</strong></td><td><strong>Flow matching (rectified flow)</strong> for latent image/video; <strong>EDM</strong> for pixel‑space &amp; world models</td><td>flow's straight paths → fewer steps + easy distillation (SD3, Flux). EDM's preconditioning is unbeaten in pixel space &amp; is what DIAMOND uses.</td></tr>
+<tr><td><strong>What the net predicts</strong></td><td><strong>velocity</strong> (flow) or <strong>\(x_0\) with EDM preconditioning</strong>; \(v\)-prediction if you stay in DDPM‑land</td><td>all beat raw \(\varepsilon\)-prediction at high noise; well‑scaled targets at every noise level.</td></tr>
+<tr><td><strong>Timestep sampling</strong></td><td><strong>logit‑normal</strong> (flow) / <strong>log‑normal σ</strong> (EDM), not uniform</td><td>concentrate training where the signal is (mid‑noise); ends are nearly trivial.</td></tr>
+<tr><td><strong>Noise schedule</strong></td><td>flow: linear \(t\) path (+ <strong>resolution‑dependent timestep shift</strong> for big images). DDPM: <strong>cosine</strong> and <strong>zero‑terminal‑SNR</strong>. EDM: <strong>Karras \(\rho\approx7\)</strong></td><td>linear DDPM over‑noises at high res; cosine + zero‑terminal‑SNR fixes the "can't produce pure black/white" bug; Karras spends steps where detail is decided.</td></tr>
+<tr><td><strong>Backbone</strong></td><td><strong>DiT / MM‑DiT</strong> (transformer) for anything new; U‑Net still fine &amp; cheaper at small scale</td><td>transformers scale predictably and give joint image‑text attention; adaLN‑Zero makes them train stably.</td></tr>
+<tr><td><strong>Space</strong></td><td><strong>latent</strong> diffusion (VAE), increasingly <strong>representation autoencoders</strong> (DINO‑based)</td><td>diffuse in a compact, semantically‑clean space, not raw pixels — far cheaper, better samples.</td></tr>
+<tr><td><strong>Sampler</strong></td><td>flow: Euler/midpoint ~20–50 steps, then <strong>distill</strong> to 1–4. EDM: <strong>Heun</strong> ~15–35</td><td>straight/2nd‑order integration is accurate per step; distillation collapses the step count.</td></tr>
+<tr><td><strong>Guidance</strong></td><td><strong>CFG</strong> (\(p_{\text{uncond}}\!\approx\!0.1\text{–}0.2\), \(w\!\approx\!3\text{–}8\)) + <strong>guidance interval / rescaling</strong>; <strong>autoguidance</strong> for max quality; <strong>distill</strong> it away for speed</td><td>see §8 — plain CFG works, but the add‑ons fix its saturation/diversity costs cheaply.</td></tr>
+<tr><td><strong>Non‑negotiables</strong></td><td><strong>EMA</strong> weights for sampling; unit tests on the schedule math; sample from pure noise to validate</td><td>the silent bugs (wrong schedule, loss‑looks‑fine‑but‑sampling‑broken) live exactly here.</td></tr>
+</table>
+
+<div class="box key">
+<span class="tag">The one‑paragraph answer</span>
+<p><strong>Yes — flow matching (rectified flow) is the current default</strong> for new latent image/video models, with a
+<strong>DiT/MM‑DiT</strong> backbone, <strong>logit‑normal</strong> timestep sampling, a <strong>resolution‑shifted linear path</strong>,
+and <strong>CFG</strong> guidance (plus interval/rescaling), usually <strong>distilled</strong> to a few steps for serving. <strong>EDM
+with the Karras schedule</strong> is the best practice for <em>pixel‑space</em> and world models (DIAMOND) — and conceptually flow
+matching and EDM are converging into one well‑engineered framework. Plain DDPM is now mostly the <em>teaching</em> baseline, and DDIM
+lives on as the "free" fast sampler for any \(\varepsilon\)-trained model.</p>
+</div>
+
+<!-- ============================================================ 11 REPO -->
+<h2 id="repo"><span class="n">11</span>What this repo implements now</h2>
+<p>After this session, the code covers six of the pieces above; two remain deliberate stubs.</p>
+<table>
+<tr><th>Piece</th><th>Status</th><th>File(s)</th></tr>
+<tr><td>DDPM (forward + loss + sampler)</td><td><span class="pill ok">built + trained</span></td><td><code>core/gaussian_diffusion.py</code>, <code>core/samplers/ddpm.py</code></td></tr>
+<tr><td>DDIM (same weights, deterministic)</td><td><span class="pill ok">built</span></td><td><code>core/samplers/ddim.py</code></td></tr>
+<tr><td>Score matching</td><td><span class="pill ok">implicit</span> (= DDPM ε‑pred)</td><td>see the identity in §3; no separate module</td></tr>
+<tr><td>Flow matching (objective + ODE sampler)</td><td><span class="pill ok">built this session</span></td><td><code>core/flow_matching.py</code>, <code>core/samplers/flow_matching.py</code></td></tr>
+<tr><td>U‑Net backbone</td><td><span class="pill ok">built</span></td><td><code>models/unet.py</code></td></tr>
+<tr><td>DiT backbone (drop‑in for U‑Net)</td><td><span class="pill ok">built this session</span></td><td><code>models/dit.py</code>, registry <code>models/build.py</code></td></tr>
+<tr><td>EDM (σ‑space + Heun)</td><td><span class="pill ok">built this session</span></td><td><code>core/edm.py</code>, <code>core/samplers/edm.py</code></td></tr>
+<tr><td>Guidance / text conditioning</td><td><span class="pill no">not yet</span></td><td>would add cross‑attention (U‑Net) or MM‑DiT attention + CFG dropout</td></tr>
+</table>
+<p class="muted">Objective (<code>ddpm</code>|<code>flow</code>|<code>edm</code>) and backbone (<code>unet</code>|<code>dit</code>) are now
+orthogonal config switches, so every combination trains and samples — all <strong>four</strong> methods (DDPM, DDIM, flow, EDM) are
+live. Verified by the overfit tests in <code>tests/test_dit.py</code>, <code>tests/test_flow.py</code>, <code>tests/test_edm.py</code>.
+The head‑to‑head is <code>scripts/compare_methods.py</code> (trains the three objectives, sweeps step counts per sampler, plots
+quality‑vs‑steps and quality‑vs‑compute).</p>
+
+<!-- ============================================================ 12 DISTILLATION -->
+<h2 id="distill"><span class="n">12</span>Distillation — turning 20–1000 steps into 1–4</h2>
+<p>Every method above pays the same tax at inference: integrating the reverse ODE/SDE costs one network evaluation (NFE) per step — ~1000 for
+ancestral DDPM, ~20–50 for DDIM/EDM, ~10–30 for flow matching. <strong>Distillation</strong> trains a <em>student</em> to reproduce the teacher's
+final image in <strong>1–4 steps</strong> by learning to <em>jump</em> along the trajectory instead of crawling it. This is how SDXL‑Turbo, LCM,
+and Flux‑schnell run in real time.</p>
+
+<div class="box key">
+<span class="tag">The shared setup</span>
+<p>Start from a trained <strong>teacher</strong> (any diffusion or FM model) and its <em>deterministic</em> sampler (DDIM / PF‑ODE / FM‑ODE). That sampler
+defines, for each noise \(x_T\), a fixed trajectory ending at a clean sample \(x_0\). <strong>Every distillation method is a different way to compress that
+teacher trajectory</strong> — either by taking bigger jumps along it (methods 1–2) or by matching the teacher's output <em>distribution</em> directly (method 3).</p>
+</div>
+
+<h4>Method 1 — Progressive Distillation (Salimans &amp; Ho, 2022)</h4>
+<p><strong>Idea:</strong> teach a student to do <em>two</em> teacher steps in <em>one</em>, then repeat — halving the step count each round: \(1024\to512\to\cdots\to4\to2\to1\).</p>
+<ul>
+  <li><strong>Target:</strong> run the teacher's deterministic sampler for two steps, \(x_t\to x_{t-1}\to x_{t-2}\). The student \(f_\phi\) is trained so that
+      <em>one</em> of its steps from \(x_t\) lands directly on the teacher's two‑step result \(x_{t-2}\):
+      <div class="eq">$$\mathcal L=\big\lVert f_\phi(x_t,t)\ -\ \underbrace{\text{DDIM}_{\text{teacher}}^{2\text{ steps}}(x_t)}_{\text{fixed target }x_{t-2}}\big\rVert^2.$$</div></li>
+  <li><strong>Loop:</strong> distil student → it becomes the new teacher → distil again (halve steps) → … Each round the student needs half the NFEs of the last.</li>
+  <li><strong>Inference:</strong> after \(k\) rounds, sample in \(N/2^k\) steps (down to 1–2). Deterministic.</li>
+  <li><strong>Trade‑off:</strong> simple, stable, no adversary — but many training rounds, and quality softens toward 1 step.</li>
+</ul>
+
+<h4>Method 2 — Consistency Models / LCM (Song 2023; Luo 2023)</h4>
+<p><strong>Idea:</strong> learn a function \(f_\phi(x_t,t)\) that maps <em>any</em> point on a trajectory <strong>straight to its endpoint</strong> (the clean
+sample) in one shot. If every point on a trajectory maps to the same endpoint, you can jump from pure noise to data in a single evaluation.</p>
+<ul>
+  <li><strong>The self‑consistency constraint:</strong> two adjacent points on the <em>same</em> teacher trajectory must map to the same place:
+      <div class="eq">$$f_\phi(x_t,t)\ \approx\ f_\phi(x_{t'},t')\quad\text{for }t'<t\text{ on the same PF‑ODE path},\qquad f_\phi(x_0,0)=x_0\ (\text{boundary}).$$</div></li>
+  <li><strong>Training (consistency <em>distillation</em>):</strong> take a data point, noise it to \(x_t\); use one teacher ODE step to get the adjacent \(x_{t'}\);
+      push the student's outputs at \(x_t\) and \(x_{t'}\) together (the target side uses an EMA "target network" for stability):
+      <div class="eq">$$\mathcal L=\big\lVert f_\phi(x_t,t)-f_{\phi^-}(x_{t'},t')\big\rVert^2,\qquad \phi^-=\text{EMA}(\phi).$$</div></li>
+  <li><strong>Inference:</strong> <strong>1 step</strong> \(x_0=f_\phi(\text{noise},T)\), or 2–4 steps of "\(f\) then re‑noise a little" for higher quality (the
+      standard LCM multi‑step sampler).</li>
+  <li><strong>LCM = </strong> consistency distillation done in a <em>latent</em> diffusion model (Stable Diffusion) — the version you actually see in ComfyUI/diffusers
+      as "LCM‑LoRA," giving 4‑step SD. <strong>LCM‑LoRA</strong> distils only a small LoRA adapter, so it's cheap and swappable onto any SD checkpoint.</li>
+  <li><strong>Trade‑off:</strong> genuinely 1–4 step; but pure 1‑step can look slightly soft/less diverse. No adversary needed.</li>
+</ul>
+
+<h4>Method 3 — Distribution Matching Distillation (DMD / DMD2, Yin 2023–24)</h4>
+<p><strong>Idea:</strong> don't match the teacher's <em>trajectory</em> point‑by‑point — match its <em>output distribution</em>. Train a one‑step generator
+\(G_\phi(\text{noise})\to\) image so that the distribution of its samples equals the teacher's data distribution. This gives the best few‑step quality today
+(SDXL‑Turbo‑class), because it optimizes the thing you actually care about (the sample distribution), not path fidelity.</p>
+<ul>
+  <li><strong>How you match distributions without densities:</strong> minimize an (approximate reverse) KL between the generator's output distribution \(p_G\) and the
+      data distribution \(p_{\text{data}}\). Its gradient needs only the <em>difference of two scores</em>:
+      <div class="eq">$$\nabla_\phi \mathrm{KL}(p_G\,\|\,p_{\text{data}})\ \propto\ \mathbb E\big[\ \underbrace{s_{\text{fake}}(x)}_{\text{score of }p_G}-\underbrace{s_{\text{real}}(x)}_{\text{teacher's score}}\ \big].$$</div>
+      <strong>Real score</strong> = the frozen teacher (it already learned \(\nabla\log p_{\text{data}}\)). <strong>Fake score</strong> = a second diffusion model
+      trained <em>online</em> to score the generator's own current outputs. The generator is nudged so its samples look, to the teacher's score, like real data.</li>
+  <li><strong>Training loop (three players, GAN‑like but score‑based):</strong> (1) generator makes a one‑step image from noise; (2) update the <em>fake‑score</em> net on
+      the generator's outputs (a normal diffusion loss); (3) update the <em>generator</em> using \(s_{\text{fake}}-s_{\text{real}}\). DMD2 adds a GAN discriminator and drops
+      an expensive regression term for stability/quality.</li>
+  <li><strong>Inference:</strong> 1 step (or 4 for DMD2's best numbers). Deterministic generator.</li>
+  <li><strong>Trade‑off:</strong> SOTA few‑step fidelity and diversity; but the training is heavier (two/three networks, adversarial) and fiddlier than consistency.</li>
+</ul>
+
+<h4>Two different things get distilled — guidance vs steps</h4>
+<p>A "fast guided model" compresses <em>two independent</em> costs; it helps to see them apart.</p>
+<div class="box key">
+<span class="tag">Guidance distillation vs step distillation — one stage or two?</span>
+<ul>
+  <li><strong>Step distillation</strong> (methods 1–3 above) attacks the <em>many‑steps</em> cost: 20–1000 → 1–4 steps.</li>
+  <li><strong>Guidance distillation</strong> attacks the <em>other</em> cost — CFG needs <em>two</em> network passes per step (conditional + unconditional). Train the student to reproduce the <em>guided</em> output in a <strong>single</strong> pass, usually taking the guidance scale \(w\) as an <em>extra input embedding</em> so it stays tunable. (This is exactly why FLUX &amp; friends take a <code>guidance</code> scalar as input — the 2× is already folded in.) On its own it's still multi‑step.</li>
+</ul>
+<p><strong>One stage or two?</strong> Historically <em>two</em> separate stages (Salimans &amp; Ho: guidance‑distil, then progressively step‑distil). Modern practice usually <em>fuses</em> them: the teacher you sample targets from is <em>already the guided sampler</em>, so the student learns guidance <em>and</em> step‑reduction in one distillation. Both are valid; fused is now the norm (LCM/Turbo distil from a CFG teacher, so the few‑step student bakes guidance in).</p>
+<p><strong>Fused algorithm, concretely:</strong> (1) pick scale(s) \(w\); (2) teacher target = run the <em>CFG‑guided</em> deterministic sampler (2 passes/step) for the needed steps; (3) train the student to match that guided trajectory/endpoint in one pass and few steps via any of methods 1–3; (4) optionally condition the student on \(w\) so it's adjustable at inference. Out comes a model that is one pass/step, 1–4 steps, guidance already inside.</p>
+</div>
+
+<div class="box key">
+<span class="tag">Can you distil <em>autoguidance</em> down to a single model? Yes.</span>
+<p>Autoguidance costs two things: (a) at <strong>training</strong> time you must build/keep a bad twin; (b) at <strong>inference</strong> it runs <em>two</em> passes per step (good + bad) — the same 2× as CFG. Your instinct is right: the inference 2× is removable exactly like guidance distillation — set the <em>teacher</em> to be the <strong>autoguided</strong> sampler (good + bad) and train a student to reproduce its output in one pass. Nothing about the recipe is special; it's the same as distilling CFG, so "needs a second model at inference" is <em>not</em> inherent.</p>
+<p>What remains is only the training‑time need for a bad twin to <em>create</em> that teacher — and an early EMA snapshot makes that nearly free. So a single‑model, autoguidance‑distilled student is entirely possible; it simply hasn't propagated through shipped stacks yet (autoguidance is a 2024 result; production distillation pipelines lag). <strong>The barrier is ecosystem maturity, not the math.</strong></p>
+</div>
+
+<div class="box">
+<span class="tag">Which to use — quick guide</span>
+<div style="overflow-x:auto">
+<table>
+<tr><th>Method</th><th>Steps</th><th>Training cost</th><th>Adversary?</th><th>Best for</th></tr>
+<tr><td>Progressive Distillation</td><td>1–8</td><td>many rounds</td><td>no</td><td>simple, robust baseline</td></tr>
+<tr><td>Consistency / LCM(-LoRA)</td><td>1–4</td><td>light (LoRA)</td><td>no</td><td>fast, cheap, swap onto any SD</td></tr>
+<tr><td>DMD2 / ADD (Turbo)</td><td>1–4</td><td>heavy</td><td>yes</td><td>top few‑step quality</td></tr>
+<tr><td>Rectified‑Flow reflow (§5.6)</td><td>1–4</td><td>medium</td><td>no</td><td>straightening FM models</td></tr>
+</table>
+</div>
+<p style="margin-bottom:0"><strong>Rules of thumb:</strong> for a flow‑matching model, <em>reflow</em> then optionally consistency. For an existing Stable‑Diffusion
+checkpoint you don't want to retrain, <em>LCM‑LoRA</em> (4‑step, minutes to apply). For the best 1–4 step quality and you can afford the compute, <em>DMD2</em>
+or an <em>ADD/Turbo</em>‑style adversarial distill.</p>
+</div>
+
+<div class="box repo">
+<span class="tag">How to run (practical)</span>
+<p><strong>Off‑the‑shelf (no training):</strong> in 🤗 <code>diffusers</code>, load an <code>LCMScheduler</code> and fuse an <code>lcm-lora</code> adapter onto any SD/SDXL
+checkpoint → generate at <code>num_inference_steps=4, guidance_scale≈1</code>. SDXL‑Turbo / SD3‑Turbo checkpoints run at 1–4 steps directly. <strong>Distilling your own:</strong>
+(1) train/keep a teacher; (2) pick a method — consistency distillation is the least code (one student + an EMA target + one teacher ODE step per iter); (3) for FM models,
+run 1–2 <em>reflow</em> passes first (§5.6) since straighter teachers distil better; (4) evaluate quality‑vs‑steps, not just loss — few‑step models are judged on FID/human
+eval at their target step count.</p>
+</div>
+
+<hr>
+<p class="fn">Companion to <code>diffusion-derivation.html</code> and <code>diffusion-handbook.pdf</code>. Guidance derivation follows the
+course's Lecture 4 (Dhariwal 2021; Ho &amp; Salimans 2022); EDM follows Karras et al. 2022; flow matching follows Lipman et al. /
+Liu et al. 2023. Code references point at the live Phase‑1 implementation under <code>diffusion/src/diffusion/</code>. Math rendered
+with MathJax — open in a browser with a network connection.</p>
+
+</div>
+
+<script>
+// scroll progress bar
+const bar=document.getElementById('bar');
+addEventListener('scroll',()=>{const h=document.documentElement;
+  const s=h.scrollTop/(h.scrollHeight-h.clientHeight);bar.style.width=(s*100)+'%';},{passive:true});
+</script>
+</body>
+</html>

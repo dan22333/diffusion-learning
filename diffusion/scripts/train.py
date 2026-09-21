@@ -13,7 +13,7 @@ import argparse
 import os
 
 from diffusion.config import Config
-from diffusion.core.samplers import DDIMSampler
+from diffusion.core.samplers import DDIMSampler, EDMSampler, FlowMatchingSampler
 from diffusion.eval import save_image_grid, save_loss_curve
 from diffusion.train import Trainer
 
@@ -32,8 +32,15 @@ def main() -> None:
     out = cfg.train.out_dir
     save_loss_curve(losses, os.path.join(out, "loss_curve.png"))
 
-    # Sample with DDIM (deterministic, fast) from the EMA weights.
-    sampler = DDIMSampler(trainer.diffusion)
+    # Sample from the EMA weights with the sampler that matches the objective:
+    # flow integrates its velocity ODE; EDM runs Heun; DDPM weights use DDIM (fast).
+    obj = cfg.diffusion.objective
+    if obj == "flow":
+        sampler = FlowMatchingSampler(trainer.diffusion)
+    elif obj == "edm":
+        sampler = EDMSampler(trainer.diffusion)
+    else:
+        sampler = DDIMSampler(trainer.diffusion)
     samples = trainer.sample(sampler, num_images=cfg.data.num_images, num_steps=50)
     save_image_grid(samples, os.path.join(out, "samples.png"), nrow=4)
     save_image_grid(trainer.batch, os.path.join(out, "target.png"), nrow=4)
