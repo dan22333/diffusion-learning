@@ -48,6 +48,13 @@ in LaTeX, every idea built up from first principles with worked examples.*
 
 **Chapter 4 — The Diffusion Handbook (Parts I–X)** *(pending source recovery — see note)*
 
+**Chapter 5 — Image conditioning: vision encoder + image projector**
+- 5.1 Two kinds of conditioning: semantic vs pixel-aligned
+- 5.2 Image conditioning as tokens: $I = P_{\rm img}(E_{\rm vision}(x_0))$
+- 5.3 Why encode the *clean* image, and why a projector at all
+- 5.4 Where $I$ actually enters: decoupled cross-attention
+- 5.5 Tokens vs channel-concat: choosing by whether the pixels line up
+
 ---
 ---
 
@@ -869,3 +876,141 @@ important than central to the newest systems.
 > source. Until then this chapter is a placeholder so the rest of the notebook is
 > complete and the handbook is not silently dropped. **The PDF itself is
 > untouched and safe.**
+
+---
+---
+
+# Chapter 5: Image conditioning — vision encoder + image projector
+
+Text conditioning answers "what should the model *make*?" with a caption. But a
+huge amount of practice is conditioning on **another image**: "make it in *this*
+style," "keep *this* person's face," "use *this* as a reference." This chapter
+builds the single most common recipe for that — turning a reference image into a
+handful of conditioning tokens the denoiser can attend to — and shows why it is
+written the way the seed formula is written:
+
+$$ I = P_{\rm img}\big(E_{\rm vision}(x_0)\big). $$
+
+## 5.1 Two kinds of conditioning: semantic vs pixel-aligned
+
+Before any formula, one distinction decides *everything* about how you wire an
+image in. Ask: **do the conditioning pixels line up, cell-for-cell, with the
+pixels I am generating?**
+
+- **Pixel-aligned** — inpainting mask, a depth/edge map, a low-res image for
+  super-resolution. Position $(i,j)$ of the condition means the same place as
+  position $(i,j)$ of the output. The tensor's own indexing carries the
+  correspondence, so the right move is to **concatenate on the channel axis** and
+  let the first convolution read both at once. No learning of "where things go"
+  is needed.
+- **Semantic / non-aligned** — a style reference, an identity photo, "the vibe of
+  this painting." There is *no* pixel correspondence: the reference face may be
+  centered while the output face is off to the left. Concatenating by position
+  would be meaningless. Instead you compress the reference into a small set of
+  **content tokens** and let **cross-attention** decide, per output location,
+  what to borrow.
+
+The seed formula lives entirely in the **second** world. $I$ is a bag of
+semantic tokens, not a spatial map.
+
+## 5.2 Image conditioning as tokens: $I = P_{\rm img}(E_{\rm vision}(x_0))$
+
+Read the formula right-to-left — it is a two-stage pipeline:
+
+$$ x_0 \;\xrightarrow{\;E_{\rm vision}\;}\; f \;\xrightarrow{\;P_{\rm img}\;}\; I. $$
+
+- $x_0$ — the **clean reference image** (not a noisy latent; see §5.3).
+- $E_{\rm vision}$ — a **frozen, pretrained vision encoder**, typically a CLIP or
+  DINO image tower. It maps the image to features $f$. Concretely a CLIP ViT-L/14
+  gives you either a single pooled embedding ($f \in \mathbb{R}^{1024}$) or the
+  full patch sequence (e.g. $f \in \mathbb{R}^{257 \times 1024}$ — a `[CLS]` token
+  plus $16\times16$ patch tokens). It is frozen because it already knows "what
+  images mean"; retraining it would waste that and risk collapse.
+- $P_{\rm img}$ — a **small learned image projector**. Its whole job is to bridge
+  the *domain gap*: $E_{\rm vision}$ lives in CLIP/DINO space, but the denoiser's
+  cross-attention was built to consume **text-encoder** tokens of some width $d$.
+  $P_{\rm img}$ maps vision features into that same $d$ and, usually, into a fixed
+  small **number** of tokens.
+- $I$ — the resulting **image conditioning tokens**, shape $(B,\,M,\,d)$ with $M$
+  small (IP-Adapter's resampler famously produces $M=16$ or $64$). These are the
+  key/value sequence the denoiser cross-attends to.
+
+$P_{\rm img}$ is not always a bare linear layer. When $E_{\rm vision}$ emits a
+long patch sequence, $P_{\rm img}$ is often a small **resampler / Perceiver-style
+attention block** with $M$ learned query tokens:
+
+```
+# P_img as a learnable resampler (schematic)
+q = learned_queries            # (M, d)      M ≪ 257
+f = E_vision(x0)               # (257, 1024) frozen features
+I = cross_attn(q, kv=proj(f))  # (M, d)      queries pull a fixed-size summary
+```
+
+So $P_{\rm img}$ does two things at once: **project** (width $1024 \to d$) and
+**summarize** ($257 \to M$ tokens).
+
+## 5.3 Why encode the *clean* image, and why a projector at all
+
+Two design choices in the formula are easy to skip past.
+
+**Why $x_0$ and not a noisy $x_t$?** The reference is a *fixed side input*, not
+part of the trajectory being denoised. We want its full semantic content, so we
+feed the clean image and encode it **once**, outside the sampling loop. Its
+tokens $I$ are then reused unchanged at every timestep — cheap, and stable.
+
+**Why $P_{\rm img}$ at all — why not feed $E_{\rm vision}(x_0)$ straight in?**
+Two mismatches make that impossible:
+
+1. **Width.** CLIP features are (say) 1024-d; the cross-attention projections
+   $W_K, W_V$ expect width $d$ (the text-token width). A linear map is the minimum
+   fix.
+2. **Semantics/scale.** CLIP-space directions are not text-encoder-space
+   directions, and their scale is different. A tiny trained projector aligns the
+   two distributions so the frozen attention weights actually "understand" the
+   injected tokens.
+
+That is the whole reason the projector is a *learned* module wrapped around a
+*frozen* encoder: freeze the expensive part that already works, train only the
+thin adapter that translates it.
+
+## 5.4 Where $I$ actually enters: decoupled cross-attention
+
+Naively you could concatenate $I$ onto the text tokens and run one
+cross-attention. In practice the strong recipe (IP-Adapter) keeps them
+**separate** — *decoupled cross-attention* — adding a second attention that
+shares the query but has its **own** $W_K', W_V'$ for the image tokens:
+
+$$ \text{out} = \underbrace{\text{Attn}(Q,\,K_\text{txt},\,V_\text{txt})}_{\text{original, frozen}} \;+\; \lambda\,\underbrace{\text{Attn}(Q,\,K_\text{img},\,V_\text{img})}_{\text{new, trained}}, $$
+
+with
+
+$$ K_\text{img}=I\,W_K',\qquad V_\text{img}=I\,W_V'. $$
+
+Why decouple? (i) It lets the base text-to-image model stay **frozen** — only
+$W_K', W_V'$ (and $P_{\rm img}$) are trained, so the adapter is tiny and doesn't
+degrade the original text behavior. (ii) The scalar $\lambda$ becomes a clean
+**image-conditioning strength** knob at inference: $\lambda=0$ recovers the pure
+text model, larger $\lambda$ leans harder on the reference. This is exactly the
+"one vector or many / add a side stream" pattern generalized to a whole image.
+
+## 5.5 Tokens vs channel-concat: choosing by whether the pixels line up
+
+Tie §5.1 back to the two mechanisms so the decision is mechanical:
+
+| Situation | Correspondence | Mechanism | Why |
+|---|---|---|---|
+| Inpaint / depth / super-res | pixel-aligned | **channel concat** into `conv_in` | indexing *is* the alignment; no cross-attn needed |
+| Style / identity / reference | none | **tokens via $I=P_{\rm img}(E_{\rm vision}(x_0))$** + cross-attn | attention learns *what* to borrow, not *where* |
+
+The failure mode of using the wrong one is instructive: channel-concat a style
+reference and the model tries to copy it *positionally* (ghosting, mis-registered
+content); tokenize a depth map and you throw away the precise geometry that only
+survives in the spatial grid. Match the mechanism to the correspondence.
+
+> **Key takeaway.** $I = P_{\rm img}(E_{\rm vision}(x_0))$ is the semantic-image
+> conditioning recipe: a **frozen** vision encoder turns the clean reference into
+> features, a **small trained projector/resampler** maps them to $M$ tokens of
+> the denoiser's width, and those tokens enter through a **decoupled**
+> cross-attention with its own $W_K',W_V'$ and a strength scalar $\lambda$. Use it
+> only when the reference does **not** align pixel-for-pixel with the output — for
+> aligned conditions, channel-concat and skip the encoder entirely.
