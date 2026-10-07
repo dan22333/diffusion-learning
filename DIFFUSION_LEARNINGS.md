@@ -55,6 +55,63 @@ in LaTeX, every idea built up from first principles with worked examples.*
 - 5.4 Where $I$ actually enters: decoupled cross-attention
 - 5.5 Tokens vs channel-concat: choosing by whether the pixels line up
 
+**Chapter 6 — Flow matching and few-step generators: FM → Consistency → FMM → AYF → MeanFlow → iMF**
+- 6.0 One notation for the whole family
+- 6.1 Flow matching: a probability path from data to noise
+- 6.2 Conditional velocity vs marginal velocity
+- 6.3 Why conditional flow matching works (the MSE argument)
+- 6.4 The continuity equation: why the ODE transports $p_t$
+- 6.5 Straight interpolant trajectory vs probability-flow trajectory
+- 6.6 Sampling, and the motivation for few-step methods
+- 6.7 Consistency models: predict the endpoint directly
+- 6.8 Consistency distillation and consistency training
+- 6.9 Flow map matching: the two-time solution operator
+- 6.10 The Lagrangian identity and FMM-LMD
+- 6.11 The Eulerian identity and FMM-EMD
+- 6.12 The JVP tangent $(v_s,1,0)$, and why it is expensive
+- 6.13 Direct FMM from scratch: cycle + dynamics
+- 6.14 AYF: stop-gradient the residual, use it as a direction
+- 6.15 MeanFlow: learn the average velocity
+- 6.16 The MeanFlow identity and its JVP target
+- 6.17 iMF: a network-independent, guidance-flexible target
+- 6.18 The unifying view: what object does the network learn?
+
+**Chapter 7 — Guidance: tilting a generative prior toward a reward**
+- 7.1 The distribution-level goal: reward minus KL
+- 7.2 The optimal tilted distribution $q^\ast\propto p_{\rm gen}e^{R/\beta}$
+- 7.3 Classifier guidance and CFG
+- 7.4 Universal guidance: reward on the predicted clean image
+- 7.5 Manifold-preserving guidance (MPGD)
+- 7.6 Optimizing the starting noise
+- 7.7 Fine-tuning the generator (AlignProp)
+- 7.8 Flow-map terminal guidance: a short backprop graph
+
+**Chapter 8 — Application: maximizing fMRI ROI activation with generative priors**
+- 8.1 The ROI reward from a differentiable brain encoder
+- 8.2 Method A — BrainDiVE-style step-by-step diffusion guidance
+- 8.3 Method B — specificity: "X but not Y"
+- 8.4 Normalizing voxel responses
+- 8.5 Methods C–F — manifold guidance, noise optimization, flow-map, LoRA
+- 8.6 Method G — optimize a distribution, not a single image
+- 8.7 The real adversary: encoder reward hacking
+- 8.8 A three-level plan, and the master gradient
+
+**Chapter 9 — MeanFlow and iMF in depth: moving targets, JVP noise, and guidance intervals**
+- 9.1 The moving-target problem: stop-gradient ≠ fixed target
+- 9.2 Conditional and unconditional FM share the label $\epsilon-x$
+- 9.3 Second derivatives are not inherently noisy
+- 9.4 Noisy $v_c$ *inside* the JVP: $J\eta$ and its covariance
+- 9.5 The Jacobian SVD: which directions amplify noise
+- 9.6 SVD vs PCA
+- 9.7 Label noise vs tangent noise: why iMF's reversal helps
+- 9.8 CFG inside original MeanFlow
+- 9.9 Two independent axes: conditional/unconditional vs $r=t$ / $r<t$
+- 9.10 Why original MF bakes in the CFG scale
+- 9.11 iMF makes $\omega$ an input: embedding and in-context conditioning
+- 9.12 The guidance interval $[t_{\min},t_{\max}]$ and 1-NFE
+- 9.13 Guidance interval vs number of inference steps
+- 9.14 The full FM → MF → modified MF → iMF ladder
+
 ---
 ---
 
@@ -1014,3 +1071,911 @@ survives in the spatial grid. Match the mechanism to the correspondence.
 > cross-attention with its own $W_K',W_V'$ and a strength scalar $\lambda$. Use it
 > only when the reference does **not** align pixel-for-pixel with the output — for
 > aligned conditions, channel-concat and skip the encoder entirely.
+
+---
+---
+
+# Chapter 6: Flow matching and few-step generators — FM → Consistency → FMM → AYF → MeanFlow → iMF
+
+Diffusion sampling (Chapter 3) is slow because generation integrates an ODE/SDE
+with many network evaluations. This chapter builds the modern line of work that
+collapses that trajectory into **one or a few steps**, told as a single story:
+flow matching gives the velocity field; consistency models, flow map matching,
+and MeanFlow each learn a *different object* that lets you jump across time; and
+AYF/iMF are the training-stability refinements that made those objects learnable
+from scratch. The payoff for the rest of the notebook is a differentiable map
+$\text{noise}\to\text{image}$ with a *short* computational graph — exactly what
+Chapters 7–8 need for reward guidance.
+
+## 6.0 One notation for the whole family
+
+We use one convention throughout, which differs from the DDPM convention of
+Chapter 3 (there $t=0$ was data, $t=T$ noise — same spirit, continuous here):
+
+$$ t=0:\ \text{data},\qquad t=1:\ \text{noise}, $$
+
+with $x\sim p_{\rm data}$ and $\epsilon\sim N(0,I)$. For flow maps,
+
+$$ X_{s,t}(x_s)=x_t $$
+
+reads "start from state $x_s$ at time $s$, return the state at time $t$."
+
+## 6.1 Flow matching: a probability path from data to noise
+
+The simplest straight-line interpolation between a data point and noise is
+
+$$ x_t=(1-t)\,x + t\,\epsilon. $$
+
+At the endpoints $x_0=x$ (data) and $x_1=\epsilon$ (noise). For a *fixed* clean
+$x$, the interpolant is Gaussian:
+
+$$ x_t\mid x \sim N\big((1-t)x,\; t^2 I\big), $$
+
+so the marginal at time $t$ is a mixture of all those Gaussian clouds:
+
+$$ p_t(y)=\int p_{\rm data}(x)\,N\big(y;(1-t)x,\,t^2 I\big)\,dx. $$
+
+This Gaussian conditional-path construction is the general flow-matching
+framework; different schedules recover diffusion-style paths as special cases.
+
+## 6.2 Conditional velocity vs marginal velocity
+
+Differentiate one sampled path:
+
+$$ \dot x_t=\frac{d x_t}{dt}=\epsilon-x \;=:\; v_c, $$
+
+the **conditional (per-sample) velocity**. It is *not* the deterministic marginal
+field, because a single visible state $x_t=y$ can arise from many hidden pairs
+$(x,\epsilon)$, each with a different $\epsilon-x$. The deterministic velocity
+attached to the visible state must therefore average them:
+
+$$ \boxed{\,v(y,t)=\mathbb E[\epsilon-x\mid x_t=y]\,}. $$
+
+## 6.3 Why conditional flow matching works (the MSE argument)
+
+We would like to regress onto the marginal field,
+
+$$ L_{\rm FM}=\mathbb E\big\|v_\theta(x_t,t)-v(x_t,t)\big\|^2, $$
+
+but $v(x_t,t)$ contains an inaccessible conditional expectation. Instead we
+regress onto the *easy* per-sample target:
+
+$$ L_{\rm CFM}=\mathbb E\big\|v_\theta(x_t,t)-(\epsilon-x)\big\|^2. $$
+
+The basic MSE theorem $\arg\min_f \mathbb E\|f(X)-Y\|^2=\mathbb E[Y\mid X]$ gives
+
+$$ v_\theta^\ast(y,t)=\mathbb E[\epsilon-x\mid x_t=y]=v(y,t). $$
+
+So minimizing the conditional loss recovers the marginal field; the two losses
+even share the same gradient in $\theta$. This is not merely a trick — the next
+section shows the field it recovers genuinely transports $p_t$.
+
+## 6.4 The continuity equation: why the ODE transports $p_t$
+
+Take any smooth test function $\varphi:\mathbb R^D\to\mathbb R$. Along interpolant
+trajectories,
+
+$$ \frac{d}{dt}\varphi(x_t)=\nabla\varphi(x_t)^{\!\top}\dot x_t
+\;\Rightarrow\;
+\frac{d}{dt}\mathbb E[\varphi(x_t)]=\mathbb E\big[\nabla\varphi(x_t)^{\!\top}\dot x_t\big]. $$
+
+Apply the tower rule and the definition $v(x_t,t)=\mathbb E[\dot x_t\mid x_t]$:
+
+$$ \frac{d}{dt}\mathbb E[\varphi(x_t)]
+=\mathbb E\big[\nabla\varphi(x_t)^{\!\top}v(x_t,t)\big]
+=\int \nabla\varphi(y)^{\!\top}v(y,t)\,p_t(y)\,dy. $$
+
+But also $\frac{d}{dt}\mathbb E[\varphi(x_t)]=\int\varphi(y)\,\partial_t p_t(y)\,dy$.
+Integration by parts on the right, $\int\nabla\varphi^{\!\top}(p_t v)=-\int\varphi\,\nabla\!\cdot\!(p_t v)$, gives for arbitrary $\varphi$:
+
+$$ \boxed{\,\partial_t p_t+\nabla\!\cdot\!(p_t v)=0\,}. $$
+
+That is the continuity equation, so the deterministic ODE $\dot x_t=v(x_t,t)$
+transports the same marginals $p_t$.
+
+## 6.5 Straight interpolant trajectory vs probability-flow trajectory
+
+This distinction is essential. The sampled straight line has velocity
+$\epsilon-x$; the probability-flow ODE has velocity $\mathbb E[\epsilon-x\mid x_t]$.
+In general
+
+$$ \epsilon-x \;\neq\; v(x_t,t). $$
+
+So the two share the same *marginal distribution* at every $t$ but *not* the same
+individual trajectory: the sampled interpolants are straight, while the marginal
+ODE trajectories are curved. That curvature is exactly why single-step Euler is
+inaccurate and why few-step methods exist.
+
+## 6.6 Sampling, and the motivation for few-step methods
+
+With $v_\theta$ trained, draw $x_1\sim N(0,I)$ and integrate *backward* $1\to0$:
+
+$$ x_0=x_1-\int_0^1 v_\theta(x_\tau,\tau)\,d\tau, \qquad x_{t-\Delta t}\approx x_t-\Delta t\,v_\theta(x_t,t). $$
+
+If the trajectory curves, many evaluations are needed. Everything below is an
+attempt to do this in one or a few network calls.
+
+## 6.7 Consistency models: predict the endpoint directly
+
+Instead of local velocity, predict the clean endpoint:
+
+$$ f_\theta(x_t,t)\approx x_0. $$
+
+The **consistency condition** is that all points on one trajectory map to the
+same endpoint: $f(x_s,s)=f(x_t,t)=x_0$. The boundary condition $f(x_0,0)=x_0$ is
+baked in architecturally with skip/output coefficients,
+
+$$ f_\theta(x_t,t)=c_{\rm skip}(t)\,x_t+c_{\rm out}(t)\,F_\theta(x_t,t), \qquad c_{\rm skip}(0)=1,\; c_{\rm out}(0)=0, $$
+
+so $f_\theta(x_0,0)=x_0$ automatically.
+
+## 6.8 Consistency distillation and consistency training
+
+**Distillation** uses a pretrained teacher ODE. Pick adjacent times $t_{n+1}>t_n$,
+take a noisy $x_{t_{n+1}}$, run one small teacher step $x_{t_{n+1}}\to\hat x_{t_n}$,
+and train the two to agree on the endpoint:
+
+$$ L_{\rm CD}=d\big(f_\theta(x_{t_{n+1}},t_{n+1}),\,f_{\theta^-}(\hat x_{t_n},t_n)\big), $$
+
+where $\theta^-$ is usually an EMA target. **Training from scratch** (no teacher)
+imposes the same condition $f_\theta(x_t,t)\approx f_{\theta^-}(x_s,s)$ but must
+construct good same-trajectory pairs from the forward corruption process alone —
+fragile, hence the carefully designed discretization curricula. One-step
+sampling is $x_0=f_\theta(x_1,1)$; multistep re-noises and reapplies, which can
+reintroduce endpoint error.
+
+## 6.9 Flow map matching: the two-time solution operator
+
+Consistency models only learn a map to *one* distinguished endpoint. Flow map
+matching (FMM) generalizes to arbitrary start/destination times:
+
+$$ X_\theta(x_s,s,t)\approx X_{s,t}(x_s)=x_t. $$
+
+The exact map satisfies $X_{s,s}(x)=x$, enforced by the parameterization
+
+$$ X_\theta(x,s,t)=x+(t-s)\,F_\theta(x,s,t)\;\Rightarrow\; X_\theta(x,s,s)=x. $$
+
+FMM admits both teacher-distillation and direct-from-scratch training, and lets
+you pick the step count *after* training.
+
+## 6.10 The Lagrangian identity and FMM-LMD
+
+Fix the start $(x_s,s)$ and vary the destination $t$. Then $y(t)=X_{s,t}(x_s)$ is
+the ODE trajectory itself, so
+
+$$ \boxed{\,\partial_t X_{s,t}(x_s)=v\big(X_{s,t}(x_s),t\big)\,}. $$
+
+With a pretrained teacher $v_\phi$, the **Lagrangian map distillation** residual
+and loss are
+
+$$ r_{\rm LMD}=\partial_t X_\theta(x_s,s,t)-v_\phi\big(X_\theta(x_s,s,t),t\big), \qquad L_{\rm FMM\text{-}LMD}=\mathbb E\|r_{\rm LMD}\|^2. $$
+
+Procedure: sample $(x,\epsilon,s,t)$, form $x_s=I_s$, push through $X_\theta$,
+compute $\partial_t X_\theta$ and the teacher velocity at the predicted
+destination, and MSE them.
+
+## 6.11 The Eulerian identity and FMM-EMD
+
+Now fix the destination $t$ and slide the *start* along one teacher trajectory.
+Define $g(\tau)=X_{\tau,t}(x_\tau)$. Every start lies on the same trajectory with
+the same destination, so $g(\tau)=x_t$ is constant, $dg/d\tau=0$. The chain rule
+$\partial_s X+J_x X\,\dot x_\tau=0$ with $\dot x_\tau=v(x_\tau,\tau)$ gives the
+**Eulerian identity**
+
+$$ \boxed{\,\partial_s X+J_x X\,v=0\,}. $$
+
+The **Eulerian map distillation** residual and loss:
+
+$$ r_{\rm EMD}=\partial_s X_\theta+J_x X_\theta\,v_s, \qquad L_{\rm FMM\text{-}EMD}=\mathbb E\|r_{\rm EMD}\|^2. $$
+
+## 6.12 The JVP tangent $(v_s,1,0)$, and why it is expensive
+
+The network input is $u=(x_s,s,t)$. To move the start along the teacher
+trajectory, perturb $x_s(\delta)=x_s+\delta v_s$, $s(\delta)=s+\delta$,
+$t(\delta)=t$ — tangent $d=(v_s,1,0)$. A single **Jacobian-vector product**
+delivers the Eulerian residual:
+
+$$ J_u X_\theta\,(v_s,1,0)=J_x X_\theta\,v_s+\partial_s X_\theta=r_{\rm EMD}. $$
+
+The catch for FMM: the loss $\|r_\theta\|^2$ has gradient
+$\nabla_\theta L=2(\partial r_\theta/\partial\theta)^{\!\top}r_\theta$, and
+$r_\theta$ *already* contains first derivatives of $X_\theta$. So backprop needs
+mixed second derivatives $\partial^2 X/\partial\theta\partial x$,
+$\partial^2 X/\partial\theta\partial s$ (and $\partial^2 X/\partial\theta\partial t$
+for LMD). The JVP gets the first derivative cheaply, but differentiating through
+the JVP is still higher-order — the cost AYF is designed to avoid.
+
+## 6.13 Direct FMM from scratch: cycle + dynamics
+
+With no teacher, use the stochastic interpolant $I_t$ and its sample velocity
+$\dot I_t$. Naïvely training $\partial_t X(I_s,s,t)\approx\dot I_t$ fails: it
+learns the conditional-mean/denoising map $\mathbb E[I_t\mid I_s]$, not the
+deterministic probability-flow map. The fix pairs a **cycle** constraint with a
+**dynamics** constraint. Map back then forward,
+
+$$ y_s=X_\theta(I_t,t,s),\qquad \hat I_t=X_\theta(y_s,s,t), $$
+
+and combine
+
+$$ L_{\rm cycle}=\|\hat I_t-I_t\|^2,\quad L_{\rm dyn}=\|\partial_t X_\theta(y_s,s,t)-\dot I_t\|^2,\quad L_{\rm direct}=\mathbb E[L_{\rm cycle}+L_{\rm dyn}]. $$
+
+The cycle enforces forward/backward trajectory correspondence; the dynamics term
+forces the correct marginal velocity in expectation.
+
+## 6.14 AYF: stop-gradient the residual, use it as a direction
+
+Align Your Flow (AYF) keeps the same flow-map geometry but changes the
+optimization: **measure the differential residual, stop-gradient it, and use it
+as a first-order training direction** — avoiding backprop through the JVP.
+
+**AYF-EMD.** Let $A=X_\theta(x_s,s,t)$ and take a tiny teacher step at the start,
+$s'=s+\delta$, $x_{s'}=x_s+\delta v_s$, giving the shorter map
+$B=X_{\theta^-}(x_{s'},s',t)$. The exact map has $A=B$, and Taylor expansion gives
+$B-A=\delta\,r_{\rm EMD}+O(\delta^2)$. The one-sided loss
+$L_\delta=\tfrac12\|A-\operatorname{sg}(B)\|^2$ has gradient
+$\nabla_\theta L_\delta\approx-\delta\,(\partial A/\partial\theta)^{\!\top}r_{\rm EMD}$ —
+needing the *numerical* $r_{\rm EMD}$ (one JVP, detached), not $\partial r_{\rm EMD}/\partial\theta$.
+
+**AYF-LMD.** Let $A=X(x_s,s,t)$ and $B=X(x_s,s,t-\delta)=A-\delta\partial_t X$.
+Take the remaining tiny teacher step $T=B+\delta v_\phi(B,t-\delta)$; smoothness
+gives $A-T=\delta\,r_{\rm LMD}+O(\delta^2)$, and the one-sided loss has gradient
+$\nabla_\theta L\approx\delta\,(\partial A/\partial\theta)^{\!\top}r_{\rm LMD}$.
+
+So FMM vs AYF is the same fixed point $r=0$, different optimization:
+
+$$ \text{FMM: } \nabla_\theta\|r\|^2 = J_\theta r^{\!\top} r \qquad\text{vs}\qquad \text{AYF: } r^-=\operatorname{sg}(r),\;\; \nabla_\theta L\sim J_\theta X^{\!\top} r^-. $$
+
+## 6.15 MeanFlow: learn the average velocity
+
+MeanFlow learns neither local velocity nor an endpoint, but the **average
+velocity over an interval**:
+
+$$ u(z_t,r,t)=\frac1{t-r}\int_r^t v(z_\tau,\tau)\,d\tau. $$
+
+Because $z_t-z_r=\int_r^t v\,d\tau$, one average-velocity prediction jumps the
+whole interval:
+
+$$ z_r=z_t-(t-r)\,u(z_t,r,t), \qquad\text{one-step: } z_0=z_1-u(z_1,0,1). $$
+
+## 6.16 The MeanFlow identity and its JVP target
+
+Multiply out $(t-r)u=\int_r^t v\,d\tau$ and differentiate in $t$ (holding $r$). The
+fundamental theorem gives $v$ on the right; the product rule gives
+$u+(t-r)\,du/dt$ on the left:
+
+$$ \boxed{\,v=u+(t-r)\frac{du}{dt}\,}, \qquad\text{i.e.}\qquad u=v-(t-r)\frac{du}{dt}. $$
+
+The total derivative along the trajectory is
+$\frac{du}{dt}=J_z u\,v+\partial_t u$, so the JVP tangent is $(v,0,1)$. Since the
+true $v$ is unavailable, **original MeanFlow** substitutes the conditional
+$v_c=\epsilon-x$, computes
+$\dot u_\theta=\mathrm{JVP}(u_\theta;(v_c,0,1))$, forms the target
+$u_{\rm tgt}=v_c-(t-r)\dot u_\theta$, and trains
+
+$$ L_{\rm MF}=\mathbb E\|u_\theta-\operatorname{sg}(u_{\rm tgt})\|^2. $$
+
+The stop-gradient prevents second-order differentiation through the JVP. Note the
+exact bridge to FMM: $X_{t,r}(z_t)=z_t-(t-r)u(z_t,r,t)$ — average velocity is just
+displacement normalized by interval length.
+
+## 6.17 iMF: a network-independent, guidance-flexible target
+
+Improved MeanFlow (iMF) fixes two problems.
+
+**Problem 1 — the target depends on the network.** $u_{\rm tgt}$ contains
+$u_\theta$ (via its JVP), so you train $u_\theta$ against a moving,
+self-referential target. Worse, the JVP uses the high-variance conditional
+velocity $v_c$ where theory wants the marginal $v$, and the Jacobian magnifies
+that variance.
+
+**Fix, step 1 — read the identity as a $v$-loss.** Rearranging
+$v=u+(t-r)\,du/dt$, define the compound predictor
+
+$$ V_\theta=u_\theta+(t-r)\operatorname{sg}\!\Big[\tfrac{du_\theta}{dt}\Big], \qquad L=\mathbb E\|V_\theta-v_c\|^2. $$
+
+This is MeanFlow viewed backwards: a flow-matching $v$-loss reparameterized by
+$u_\theta$.
+
+**Fix, step 2 — use a marginal-velocity estimate as the JVP tangent.** The tangent
+should be $(v,0,1)$, not $(v_c,0,1)$. iMF estimates $v$ from the model itself by
+collapsing the interval,
+
+$$ v_\theta(z_t,t)=u_\theta(z_t,t,t) \quad\text{since}\quad \lim_{r\to t}u(z_t,r,t)=v(z_t,t) $$
+
+(or an auxiliary velocity head). Then
+$\dot u_\theta=\mathrm{JVP}(u_\theta;(v_\theta,0,1))$,
+$V_\theta=u_\theta+(t-r)\operatorname{sg}(\dot u_\theta)$, and
+
+$$ L_{\rm iMF}=\mathbb E\|V_\theta-(\epsilon-x)\|^2. $$
+
+Now the *prediction* depends only on the model's own marginal-velocity estimate,
+while the conditional $\epsilon-x$ stays on the right where MSE marginalizes it —
+much more stable training.
+
+**Fix 2 — guidance flexibility.** Original MeanFlow can bake CFG into the average
+velocity (keeping one NFE) but must fix the CFG scale at *training* time. iMF
+instead conditions the model, $u_\theta(z_t,r,t,c,\omega,\dots)$, on the guidance
+strength $\omega$ (and optionally a CFG time interval), so one trained one-step
+model can choose $\omega$ at inference.
+
+## 6.18 The unifying view: what object does the network learn?
+
+Every method in this chapter answers one question differently:
+
+$$ \text{FM: } v(x_t,t)=\text{instantaneous velocity} $$
+$$ \text{Consistency: } f(x_t,t)=\text{endpoint} $$
+$$ \text{FMM: } X(x_s,s,t)=\text{arbitrary finite-time destination} $$
+$$ \text{MeanFlow: } u(x_t,r,t)=\text{average velocity over an interval} $$
+
+and the last two are tied by $X_{t,r}(x_t)=x_t-(t-r)\,u(x_t,r,t)$. FMM/AYF ask
+how to learn the *map* robustly; MeanFlow/iMF ask how to learn its *normalized
+displacement* robustly. All of them ultimately hand you a differentiable
+$\text{noise}\to\text{image}$ map — the object Chapters 7–8 exploit.
+
+> **Key takeaway.** Flow matching learns the marginal velocity
+> $v=\mathbb E[\epsilon-x\mid x_t]$ by regressing on the cheap conditional target
+> $\epsilon-x$ (MSE recovers the conditional mean; the continuity equation
+> guarantees it transports $p_t$). The sampled interpolants are *straight* but the
+> probability-flow trajectory is *curved*, which is why one Euler step is wrong
+> and few-step methods exist. Consistency models learn the endpoint, FMM the
+> two-time map $X_{s,t}$, MeanFlow the average velocity $u$ (with
+> $X_{t,r}=x_t-(t-r)u$). The training-stability story is the stop-gradient:
+> FMM minimizes $\|r\|^2$ (needs higher-order backprop through a JVP), while AYF
+> and MeanFlow/iMF detach the residual and use it as a first-order direction —
+> and iMF further replaces the high-variance $v_c$ in the JVP with the model's own
+> marginal estimate $v_\theta=u_\theta(z_t,t,t)$.
+
+---
+---
+
+# Chapter 7: Guidance — tilting a generative prior toward a reward
+
+Chapters 1–6 build generators that sample from a learned prior $p_{\rm gen}(x)$.
+This chapter asks the orthogonal question: given a *frozen* prior and a reward
+$R(x)$ (a classifier logit, an aesthetic score, later a brain-activation
+predictor), how do we bias generation toward high reward **without destroying the
+naturalness the prior provides**? The whole chapter is organized around one
+target distribution and the many ways to approximate it — from training-free
+gradient guidance to fine-tuning. It is the bridge from "how to generate" to the
+fMRI application in Chapter 8.
+
+## 7.1 The distribution-level goal: reward minus KL
+
+The principled objective trades reward against staying close to the prior:
+
+$$ \max_q\; \mathbb E_{x\sim q}[R(x)] - \beta\,\mathrm{KL}\big(q\,\|\,p_{\rm gen}\big). $$
+
+The first term wants high reward; the KL term says *do not drift away from the
+natural images the generator produces*. The temperature $\beta$ sets the
+trade-off.
+
+## 7.2 The optimal tilted distribution $q^\ast\propto p_{\rm gen}e^{R/\beta}$
+
+Expand the objective and add a normalization multiplier $\lambda$:
+
+$$ F=\int q(x)R(x)\,dx-\beta\int q(x)\log\frac{q(x)}{p_{\rm gen}(x)}\,dx+\lambda\Big(\int q(x)\,dx-1\Big). $$
+
+The functional derivative is
+
+$$ \frac{\delta F}{\delta q(x)}=R(x)-\beta\Big[\log\frac{q(x)}{p_{\rm gen}(x)}+1\Big]+\lambda. $$
+
+Setting it to zero gives $\log\frac{q(x)}{p_{\rm gen}(x)}=\frac{R(x)}{\beta}+\text{const}$,
+hence the **exponentially tilted** (Gibbs) distribution
+
+$$ \boxed{\,q^\ast(x)\propto p_{\rm gen}(x)\,e^{R(x)/\beta}\,}. $$
+
+Every method below is an approximate sampler or optimizer for this object:
+reweight the prior by $e^{R/\beta}$ — strongly if $\beta$ is small, gently if
+$\beta$ is large.
+
+## 7.3 Classifier guidance and CFG
+
+For conditional generation, classifier guidance adds the gradient of a classifier
+log-likelihood. By Bayes,
+$\log p(x_t\mid c)=\log p(x_t)+\log p(c\mid x_t)+C$, so
+
+$$ \nabla_x\log p(x_t\mid c)=\nabla_x\log p(x_t)+\nabla_x\log p(c\mid x_t). $$
+
+**Classifier-free guidance (CFG)** avoids a separate classifier by combining the
+model's conditional and unconditional predictions, in velocity form:
+
+$$ v_{\rm CFG}=v_{\rm uncond}+\omega\,(v_{\rm cond}-v_{\rm uncond}). $$
+
+*Pros:* strong semantic control, no external differentiable reward. *Cons:*
+usually two network evaluations per step (unless distilled/amortized — cf. iMF
+§6.17), and large $\omega$ lowers diversity.
+
+## 7.4 Universal guidance: reward on the predicted clean image
+
+For an *arbitrary* differentiable reward $R$, guide at each diffusion step through
+the model's predicted clean image $\hat x_0(x_t)$:
+
+$$ g_t=\nabla_{x_t}R\big(\hat x_0(x_t)\big)=J_{\hat x_0}(x_t)^{\!\top}\,\nabla_{\hat x_0}R, $$
+
+and nudge the denoising direction: $\text{base direction}+\lambda_t\,g_t$.
+Universal Guidance shows this works for any differentiable guidance function with
+no retraining. *Pros:* training-free, arbitrary targets. *Cons:* an extra backward
+pass through reward + $\hat x_0$ at many steps; strong gradients can exploit the
+reward network.
+
+## 7.5 Manifold-preserving guidance (MPGD)
+
+Naïve pixel-space gradient ascent pushes images **off the natural-image
+manifold**: $R(x)$ goes up but the image looks wrong (reward hacking). MPGD
+constrains guidance to directions the generator's geometry can represent. If a
+decoder defines the manifold $x=D(z)$, apply reward gradients through the latent:
+
+$$ \nabla_z R\big(D(z)\big)=J_D(z)^{\!\top}\nabla_x R, $$
+
+rather than arbitrary pixel directions. *Pros:* less off-manifold drift, more
+naturalistic samples. *Cons:* the manifold caps what guidance can achieve, and
+results depend on the autoencoder's quality.
+
+## 7.6 Optimizing the starting noise
+
+For a frozen generator $x=G(\epsilon)$, search for noise that yields high reward:
+
+$$ \max_\epsilon\; R\big(G(\epsilon)\big)-\tfrac{\lambda}{2}\|\epsilon\|^2, \qquad \nabla_\epsilon R=J_G(\epsilon)^{\!\top}\nabla_x R. $$
+
+*Pros:* no fine-tuning; optimizes the true terminal reward. *Cons:* every step
+differentiates through the whole generator; local minima; $\epsilon$ can drift to
+atypical regions; reward hacking.
+
+## 7.7 Fine-tuning the generator (AlignProp)
+
+Amortize the search by training the generator itself:
+
+$$ \max_\theta\; \mathbb E_\epsilon\big[R(G_\theta(\epsilon))\big]-\beta\,D\big(p_\theta\,\|\,p_{\rm base}\big), \qquad \nabla_\theta R=J_\theta G_\theta^{\!\top}\nabla_x R. $$
+
+AlignProp backpropagates reward through diffusion sampling to fine-tune
+text-to-image models. *Pros:* amortized — every future sample benefits. *Cons:*
+expensive, prone to reward hacking and mode collapse; needs strong regularization.
+
+## 7.8 Flow-map terminal guidance: a short backprop graph
+
+This is where Chapter 6 pays off. With a one/few-step flow map $x_0=X_\theta(x_t,t,0)$,
+the reward gradient is one backward pass through a *short* graph:
+
+$$ \nabla_{x_t}R\big(X_\theta(x_t,t,0)\big)=J_{x_t}X_\theta^{\!\top}\,\nabla_{x_0}R. $$
+
+Compared with differentiating through 50 diffusion steps, the graph is dramatically
+shorter, so optimizing $x_t$ or the initial noise $x_1$ against a *terminal*
+reward is far cheaper. *Pros:* true terminal reward, shallow backprop, fast
+many-seed search. *Cons:* quality is bounded by the accuracy of the one/few-step
+map; its natural-image distribution may be narrower than a strong many-step model's.
+
+> **Key takeaway.** All reward guidance approximates the tilted distribution
+> $q^\ast(x)\propto p_{\rm gen}(x)\,e^{R(x)/\beta}$ — reweight the prior by the
+> reward, with $\beta$ setting how hard. The methods trade off *where* the
+> optimization lives and *how long* the backprop graph is: CFG/classifier
+> guidance (built-in, cheap, semantic only); Universal Guidance (training-free,
+> per-step reward backprop through $\hat x_0$); MPGD (constrain to the manifold to
+> resist reward hacking); noise optimization and AlignProp (per-sample vs
+> amortized, both differentiate the full generator); and flow-map terminal
+> guidance, which uses a one-step map to make $\nabla_{\rm noise}R$ a single short
+> backward pass. The recurring enemy is **reward hacking** — a high score that
+> reflects an off-manifold exploit of the reward model, not a genuinely good image.
+
+---
+---
+
+# Chapter 8: Application — maximizing fMRI ROI activation with generative priors
+
+This chapter instantiates the guidance machinery of Chapter 7 for a concrete
+neuroscience goal: **synthesize images that drive a target brain region**. The
+reward is a differentiable fMRI *encoding model* that predicts voxel responses
+from an image; the generative prior keeps those images natural. We work through
+the whole method ladder — training-free per-step guidance (BrainDiVE), specificity
+objectives, flow-map terminal optimization, and a distribution-level formulation —
+and end on the point that matters most in practice: the real adversary is not the
+sampler but **reward hacking of the encoder**.
+
+## 8.1 The ROI reward from a differentiable brain encoder
+
+Let a differentiable encoder predict $V$ voxel responses from image $x$:
+
+$$ E_{\rm brain}(x)=\hat r(x)\in\mathbb R^V. $$
+
+For a target ROI $T\subset\{1,\dots,V\}$ the basic reward is the mean predicted
+response over the ROI,
+
+$$ A_T(x)=\frac1{|T|}\sum_{v\in T}\hat r_v(x), \qquad R(x)=A_T(x). $$
+
+BrainDiVE is exactly this idea: a voxel-wise fMRI encoder (OpenCLIP-based) on top
+of latent diffusion (Stable Diffusion), averaging ROI activations and
+backpropagating their gradient through the predicted image into the diffusion
+process.
+
+## 8.2 Method A — BrainDiVE-style step-by-step diffusion guidance
+
+This is Universal Guidance (§7.4) with $R=A_T$. At latent $z_t$, form the
+predicted clean image $\hat x_0(z_t)$, run the encoder, and chain the gradient
+back:
+
+$$ g_t=\nabla_{z_t}A_T\big(\hat x_0(z_t)\big) =J_{\hat x_0}(z_t)^{\!\top}\,J_{E_{\rm brain}}(\hat x_0)^{\!\top}\,\nabla_{\hat r}A_T, $$
+
+then modify the diffusion step with $g_t$. *Pros:* generator frozen, strong
+natural-image prior, trivial to swap ROI. *Cons:* reward + backprop at many steps
+(slow); early noisy $\hat x_0$ give imperfect gradients; the encoder can be
+exploited.
+
+## 8.3 Method B — specificity: "X but not Y"
+
+Maximizing $A_T$ alone can produce globally hyper-activating images that light up
+*everything*. For interpretable, **selective** results, subtract a control:
+
+$$ R(x)=A_T(x)-\lambda\,A_C(x), $$
+
+e.g. "food ROI but not face ROI": $R=A_{\rm food}-\lambda A_{\rm face}$. Variants
+compare the target to all non-target regions or to the hardest competitor:
+
+$$ R(x)=A_T(x)-\lambda\,\frac1K\sum_{k\neq T}A_k(x), \qquad R(x)=A_T(x)-\lambda\,\max_{k\neq T}A_k(x). $$
+
+This yields *selectivity*, not generic high activation — the scientifically
+meaningful quantity.
+
+## 8.4 Normalizing voxel responses
+
+Voxels differ in scale, so raw means are dominated by high-variance voxels.
+Standardize first,
+
+$$ z_v(x)=\frac{\hat r_v(x)-\mu_v}{\sigma_v}, \qquad A_T(x)=\frac1{|T|}\sum_{v\in T}z_v(x), $$
+
+and optionally weight by encoding reliability $w_v$ (e.g. held-out encoding
+correlation):
+
+$$ A_T(x)=\frac{\sum_{v\in T}w_v\,z_v(x)}{\sum_{v\in T}w_v}. $$
+
+## 8.5 Methods C–F — manifold guidance, noise optimization, flow-map, LoRA
+
+These transplant §7.5–7.8 directly, trading cost against robustness:
+
+- **C — Manifold-preserving ROI guidance (cf. §7.5).** Optimize through the
+  generator latent, $\nabla_z A_T(D(z))=J_D(z)^{\!\top}\nabla_x A_T$, instead of
+  raw pixels. Less encoder-adversarial nonsense, more naturalistic images; but may
+  suppress genuine-but-unusual high-activation stimuli.
+- **D — Optimize initial noise (cf. §7.6).** Freeze $G$ and solve
+  $\epsilon^\ast=\arg\max_\epsilon[A_T(G(\epsilon))-\alpha A_C(G(\epsilon))-\lambda\|\epsilon\|^2]$
+  with $\nabla_\epsilon R=J_G^{\!\top}J_E^{\!\top}\nabla_{\hat r}R$; many random
+  starts give diverse optima. Exact terminal reward, frozen generator, but
+  expensive per iteration and prone to overfitting the encoder.
+- **E — Flow-map / MeanFlow ROI optimization (cf. §7.8).** With a one-step map
+  $x_0=X_\theta(\epsilon,1,0)$ or MeanFlow $x_0=\epsilon-u_\theta(\epsilon,0,1)$,
+  $\nabla_\epsilon R=J_\epsilon X_\theta^{\!\top}\nabla_{x_0}A_T$ is one short
+  backward pass — ideal for fast many-seed discovery. Quality is bounded by the
+  one-step map's fidelity.
+- **F — Fine-tune a LoRA for an ROI (cf. §7.7).** Train adapters with
+  $L(\theta)=-\mathbb E_\epsilon[A_T(G_\theta(\epsilon))]+\beta L_{\rm prior}+\gamma L_{\rm diversity}$
+  (or the specificity form). Cheap generation afterward, but strong reward-hacking
+  risk and must be re-trained per objective unless conditioned.
+
+## 8.6 Method G — optimize a distribution, not a single image
+
+The most principled scientific formulation is the tilted distribution of §7.2 with
+$R=A_T$ (or its specificity form):
+
+$$ q_T^\ast(x)\propto p_{\rm natural}(x)\,\exp\!\Big[\tfrac{A_T(x)-\lambda A_C(x)}{\beta}\Big]. $$
+
+The message: *don't ask for one maximally activating image; ask for a
+natural-image distribution tilted toward selective ROI activation.* Single-image
+activation maximization is notorious for producing adversarial, unnatural stimuli;
+the distribution view keeps the prior in control.
+
+## 8.7 The real adversary: encoder reward hacking
+
+This may matter more than the choice of sampler. An encoder $E_{\rm brain}$ trained
+on NSD images can output *falsely huge* activations off its training manifold — so
+a high predicted reward does **not** imply genuine cortical activation. A robust
+objective therefore combines selectivity, an OOD/naturalness penalty, and a
+diversity term:
+
+$$ R(x)=A_T(x)-\lambda_{\rm control}A_C(x)-\lambda_{\rm OOD}\,D_{\rm natural}(x)+\lambda_{\rm div}\,D_{\rm diversity}(x). $$
+
+Crucially, **validation must be independent of the optimization encoder**:
+optimize with $E_1$, validate with a separately trained $E_2$, and ideally confirm
+with real human fMRI. BrainDiVE itself validates generated preferences with
+independent semantic/human analyses rather than trusting the encoder score alone.
+
+## 8.8 A three-level plan, and the master gradient
+
+A sensible progression for this project:
+
+1. **Baseline — reproduce BrainDiVE-style per-step guidance (Method A).** Confirms
+   the ROI encoder and reward work under an already-published procedure.
+2. **Better optimization — flow-map / MeanFlow terminal search (Method E):**
+   $\epsilon^\ast=\arg\max_\epsilon R\big(X_{1,0}(\epsilon)\big)$. Tests whether a
+   one-step map gives better terminal-reward gradients than per-step guidance.
+3. **Scientific version — selective, regularized, distribution-level reward
+   (Methods B/G):** $R(x)=A_T(x)-\lambda A_{\rm controls}(x)-\gamma D_{\rm OOD}(x)$,
+   evaluated across independent encoders and, if possible, a new fMRI experiment.
+
+Every method here is one differentiable chain $\text{noise}\to\text{natural image}\to\text{brain activation}$,
+so the master gradient is always
+
+$$ \boxed{\,\nabla_{\rm noise}A_T=J_{\rm generator}^{\!\top}\,J_{\rm brain}^{\!\top}\,\nabla_{\rm ROI}A_T\,}. $$
+
+The methodological battle — the whole arc of Chapters 6–8 — is about making that
+**generator Jacobian** accurate, cheap (few-step, §6), natural-image-preserving
+(manifold/KL, §7), and resistant to reward hacking (§8.7).
+
+> **Key takeaway.** Driving a brain ROI is reward guidance (Chapter 7) with
+> $R(x)=A_T(x)$ from a differentiable fMRI encoder, under a natural-image prior
+> (Chapter 6). The reward must be **selective** ($A_T-\lambda A_C$), **normalized**
+> across voxels, and **regularized** against OOD exploitation — because the real
+> failure mode is the encoder reporting huge activations for unnatural images, not
+> the sampler. Few-step flow maps (§6) make the terminal gradient
+> $\nabla_\epsilon R=J_\epsilon X_\theta^{\!\top}\nabla_{x_0}A_T$ a single short
+> backward pass, so the whole stack reduces to one chain
+> $\nabla_{\rm noise}A_T=J_{\rm generator}^{\!\top}J_{\rm brain}^{\!\top}\nabla_{\rm ROI}A_T$;
+> always validate with an independent encoder (ideally real fMRI), never the one
+> you optimized against.
+
+---
+---
+
+# Chapter 9: MeanFlow and iMF in depth — moving targets, JVP noise, and guidance intervals
+
+Chapter 6 gave the *shape* of MeanFlow and iMF: learn the average velocity $u$,
+and let iMF reverse the MeanFlow identity into a $v$-loss. This chapter opens the
+hood on **why** that reversal matters, and on the guidance machinery that makes a
+one-step model controllable. Three threads run through it: (1) stop-gradient
+freezes the target *within* an update but not *across* updates, so original
+MeanFlow regresses toward a **moving target**; (2) the conditional label $v_c$ is
+tolerable as a regression *label* but harmful as a JVP *tangent*, which the
+Jacobian's singular directions can amplify; and (3) a one-step model can still
+honor a continuous guidance schedule $(\omega,t_{\min},t_{\max})$ because it learns
+the *integral* of a virtual guided flow, not the flow itself. All of it reuses the
+notation of Chapter 6: $z_t=(1-t)x+t\epsilon$, $v_c=\epsilon-x$, $\Delta=t-r$.
+
+## 9.1 The moving-target problem: stop-gradient ≠ fixed target
+
+Original MeanFlow trains $u_\theta$ toward $u_{\rm tgt}=v_c-\Delta\,\dot u_\theta$
+with a stop-gradient on the target. Stop-gradient does exactly one thing: it
+blocks differentiation *through* the target during a single optimizer step, so you
+never backprop through $J_z u_\theta$ (which would need the second derivative
+$\partial^2 u_\theta/\partial\theta\,\partial z$). But it does **not** freeze the
+target across steps. At step $k$ the target is
+
+$$ u_{\rm tgt}^{(k)}=v_c-\Delta\,\dot u_{\theta_k}, $$
+
+and after the update $\theta_k\to\theta_{k+1}$ you recompute
+$u_{\rm tgt}^{(k+1)}=v_c-\Delta\,\dot u_{\theta_{k+1}}$. So $u_\theta$ is chasing a
+target whose conditional mean $\mathbb E[v_c-\Delta\dot u_{\theta_k}\mid z_t,r,t]$
+*itself drifts as $\theta_k$ drifts* — exactly the bootstrapped teacher/student
+situation of RL value targets. This moving-target instability is iMF's explicit
+motivation for the $v$-loss reformulation. Contrast the population optima:
+
+$$ \text{iMF: } V_\theta\to\mathbb E[v_c\mid z_t,t]=v(z_t,t) \quad\text{(fixed, data-defined)}; $$
+$$ \text{MF: } u_\theta\to\mathbb E[v_c-\Delta\dot u_{\theta_k}\mid z_t,r,t] \quad\text{(moves with }\theta_k). $$
+
+## 9.2 Conditional and unconditional FM share the label $\epsilon-x$
+
+A point worth stating plainly: the *raw* label does not change between conditional
+and unconditional training. With class/context $c$, feeding the network
+$(z_t,t,c)$ makes the MSE optimum
+
+$$ \mathbb E[v_c\mid z_t,t,c]=v_{\rm cond}(z_t,t,c), $$
+
+and feeding $(z_t,t,\varnothing)$ makes it
+$\mathbb E[v_c\mid z_t,t]=v_{\rm uncond}(z_t,t)$. The algebraic target is
+$v_c=\epsilon-x$ either way; what changes is *what the predictor is conditioned
+on*. This is the hook that lets a single network supply both fields for CFG (§9.8).
+
+## 9.3 Second derivatives are not inherently noisy
+
+It is tempting to justify stop-gradient by "second derivatives are noisy," but
+there is no such general law. For $f(z)=z^2$, $f'(z)=2z$ and $f''(z)=2$ — the
+second derivative is perfectly stable. The real issue is *sensitivity*: higher
+derivatives expose higher-order sensitivity. For $f(z)=\sin(100z)$,
+
+$$ f'(z)=100\cos(100z),\qquad f''(z)=-10^4\sin(100z), $$
+
+so a tiny change in $z$ swings the gradient enormously. A second derivative
+measures *how quickly the first derivative itself changes*. Large networks mix
+flat and sharply curved directions, so avoiding unnecessary higher-order gradients
+is attractive for cost and numerics — but the headline reason to prefer iMF is the
+moving target (§9.1) and the tangent noise (§9.4), not a blanket "curvature is
+noisy" claim.
+
+## 9.4 Noisy $v_c$ *inside* the JVP: $J\eta$ and its covariance
+
+Decompose the conditional label into the true field plus zero-mean noise:
+
+$$ v_c=v+\eta,\qquad \mathbb E[\eta\mid z]=0. $$
+
+Original MeanFlow inserts this *noisy sample* into the JVP tangent:
+
+$$ J_z u_\theta\,v_c=J_z u_\theta\,v+J_z u_\theta\,\eta. $$
+
+The stray term $J\eta$ still has zero conditional mean (if $J$ is fixed given $z$),
+but its covariance is reshaped by the Jacobian:
+
+$$ \operatorname{Cov}(J\eta)=J\,\Sigma_\eta\,J^{\!\top}. $$
+
+So the Jacobian can *amplify* some noise components and *suppress* others. To see
+exactly which, read off its singular directions.
+
+## 9.5 The Jacobian SVD: which directions amplify noise
+
+Take the SVD of $J:\mathbb R^n\to\mathbb R^m$,
+
+$$ J=U\Sigma V^{\!\top}, $$
+
+where the columns $v_1,\dots,v_n$ of $V$ are an orthonormal basis of the **input**
+space, the columns $u_1,\dots,u_m$ of $U$ an orthonormal basis of the **output**
+space, and there are only $\min(m,n)$ singular values, at most
+$\operatorname{rank}(J)$ nonzero. (These $u_i,v_i$ are SVD notation, unrelated to
+MeanFlow's $u,v$.) Each right-singular vector maps to its partner:
+
+$$ Jv_i=U\Sigma V^{\!\top}v_i=U\Sigma e_i=\sigma_i u_i, \qquad\text{i.e. } v_i\xrightarrow{J}\sigma_i u_i. $$
+
+Any input decomposes as $x=\sum_i a_i v_i$ (since $V$ is orthogonal), so
+
+$$ Jx=\sum_i a_i\sigma_i u_i. $$
+
+The map (1) decomposes into input directions $v_i$, (2) stretches each by
+$\sigma_i$, (3) re-expresses it in output direction $u_i$. A direction with
+$\sigma_i=10$ grows amplitude $10\times$ and **variance $100\times$**; a direction
+with $\sigma_i=0.1$ is suppressed. So the honest statement is:
+
+$$ \boxed{\text{Jacobians don't uniformly amplify noise; they stretch some directions and shrink others.}} $$
+
+That is why noise injected as a JVP tangent is risky in a way a plain label is not.
+
+## 9.6 SVD vs PCA
+
+These are easy to conflate. PCA asks *which directions in a dataset carry the most
+variance*; the SVD of a Jacobian asks *which input directions this map stretches
+most*. They connect through
+
+$$ J^{\!\top}J=V\Sigma^2 V^{\!\top}, $$
+
+so the right-singular vectors $v_i$ are eigenvectors of $J^{\!\top}J$ with
+eigenvalues $\lambda_i=\sigma_i^2$. But call them **singular directions**, not PCA
+components — you are studying the transformation $J$, not a data distribution.
+
+## 9.7 Label noise vs tangent noise: why iMF's reversal helps
+
+Standard flow matching puts the noise only in the *label*:
+
+$$ L=\|v_\theta-v_c\|^2,\qquad v_c=v+\eta, $$
+
+and MSE averages it out: $\mathbb E[v_c\mid z]=v$. Original MeanFlow instead feeds
+the *same* noisy sample into a learned JVP, turning it into $J_z u_\theta\,\eta$,
+which the Jacobian can distort (§9.4–9.5). The structural distinction:
+
+$$ \text{ordinary regression: } v_c \text{ is only a label} \quad\text{vs}\quad \text{original MF: } v_c \text{ is also an input to a learned JVP}. $$
+
+**Intermediate fix (useful but incomplete).** Replace the noisy tangent with a
+model estimate of the marginal field, $v_\theta(z,t)=u_\theta(z,t,t)$ (the diagonal
+limit $r\to t$, §6.17), giving
+$u_{\rm tgt}=v_c-\Delta[J_z u_\theta\,v_\theta+\partial_t u_\theta]$. This removes
+the noisy $v_c$ from the tangent — a real improvement — but $u_{\rm tgt}$ still
+contains $\dot u_\theta$, so the target still moves (§9.1).
+
+**iMF's reversal.** Use the *other* arrangement of the identity, $v=u+\Delta\dot u$,
+and treat the whole left side as the prediction:
+
+$$ V_\theta=u_\theta+\Delta\,\dot u_\theta,\qquad L_{\rm iMF}=\mathbb E\|V_\theta-v_c\|^2. $$
+
+Now the regression target is the *fixed, data-derived* label $v_c$; the population
+optimum is $V_\theta=\mathbb E[v_c\mid z,t]=v$. The predictor still moves (you are
+training it) but the thing it aims at is nailed down by the path construction —
+a cleaner statistical problem, while $u_\theta$ remains the underlying
+one-step-capable parameterization.
+
+## 9.8 CFG inside original MeanFlow
+
+How does original MeanFlow bake guidance into a one-step model? Take a labeled
+example $(x,c)$, sample $\epsilon,t,r$, form $z_t=(1-t)x+t\epsilon$, and take the
+raw sampled velocity $v_{\rm sample}=\epsilon-x$. Estimate the *unconditional*
+instantaneous velocity from the network on the diagonal with the class dropped,
+
+$$ v_u^\theta=u_\theta(z_t,t,t,\varnothing), $$
+
+then build the guided sample
+
+$$ v_g=v_u^\theta+\omega\,(v_{\rm sample}-v_u^\theta). $$
+
+Because $\mathbb E[v_{\rm sample}\mid z_t,c]=v_{\rm cond}$, its conditional mean is
+$v_u+\omega(v_{\rm cond}-v_u)$ — exactly CFG. So $v_g$ is a stochastic sample of the
+desired guided instantaneous field, and MeanFlow learns the average of that field.
+
+## 9.9 Two independent axes: conditional/unconditional vs $r=t$ / $r<t$
+
+A subtlety that is easy to garble: class dropout and the diagonal query are
+**different** axes. For a subset of examples the class is dropped; those use the
+raw $v_{\rm sample}$ as the target (unconditional, *no* CFG), while conditional
+examples use $v_g$. Separately, the diagonal evaluation $u_\theta(z_t,t,t,\varnothing)$
+with $r=t$ is only an *auxiliary* query to estimate instantaneous unconditional
+velocity — it is **not** "the guided case." The main prediction is still
+$u_\theta(z_t,r,t,y)$ with $r\le t$. Keep the axes separate:
+
+$$ \underbrace{\text{conditional vs unconditional}}_{\text{is }c\text{ dropped?}} \qquad\text{and}\qquad \underbrace{r=t \text{ vs } r<t}_{\text{diagonal query vs interval}}. $$
+
+## 9.10 Why original MF bakes in the CFG scale
+
+In multistep diffusion you pick $\omega$ at each inference step and recompute
+$v_{\rm CFG}^{(\omega)}$ on the fly. MeanFlow cannot: it learns a one-step
+*average* $u^{(\omega)}$, and changing $\omega$ changes the guided field
+$v^{(\omega)}$, which changes the trajectory $z^{(\omega)}$, which changes the
+entire integral. Hence
+
+$$ u^{(2)}\neq u^{(5)} \quad\text{in general}, $$
+
+so original MeanFlow effectively bakes the single training-time $\omega_0$ into the
+learned conditional mean flow — a loss of test-time flexibility that iMF targets.
+
+## 9.11 iMF makes $\omega$ an input: embedding and in-context conditioning
+
+iMF learns the whole *family* $\omega\mapsto u^{(\omega)}$ by conditioning the
+network on the guidance strength,
+
+$$ u_\theta(z,r,t,c,\omega,\dots),\qquad \omega\sim p(\omega)\ \text{during training}, $$
+
+so the same image/class recurs with different requested $\omega$, and inference
+picks $\omega\in\{2,4,8,\dots\}$ with no retraining. Since $\omega$ is a scalar but
+the transformer works in $\mathbb R^{d_{\rm model}}$, it is embedded like a
+timestep: $\omega\to e_\omega$ via Fourier/sinusoidal features $\to$ MLP. iMF feeds
+these through **in-context conditioning** — conditions become tokens concatenated
+with the latent tokens rather than only driving AdaLN-style scale/shift:
+
+$$ [\,e_c,\,e_t,\,e_r,\,e_\omega,\,e_{t_{\min}},\,e_{t_{\max}},\,z_1,\dots,z_N\,], $$
+
+so image tokens attend directly to condition tokens. The authors report this
+handles many heterogeneous conditions while reducing model size.
+
+## 9.12 The guidance interval $[t_{\min},t_{\max}]$ and 1-NFE
+
+The deepest subtlety: why pass a *time interval* to a *one-step* model? Because
+$u$ is defined as the average of an underlying continuous field, and you can make
+CFG active on only part of that virtual trajectory:
+
+$$ v_{\rm guided}(z_t,t)= \begin{cases} v_{\rm CFG}(z_t,t), & t\in[t_{\min},t_{\max}],\\[2pt] v_{\rm base}(z_t,t), & \text{otherwise}, \end{cases} \qquad u^{(\omega,t_{\min},t_{\max})}=\frac1{t-r}\int_r^t v_{\rm guided}(z_\tau,\tau)\,d\tau. $$
+
+The one-step network learns the *total displacement* that this virtual schedule
+would produce — it never traverses those times at inference. This is the entire
+MeanFlow philosophy: **learn the result of integrating a trajectory instead of
+integrating it**. The analogy: "drive Boston→New York, using the highway only
+between mile 50 and 150" can be answered by a map that predicts the final
+displacement directly, without simulating every mile. Released iMF checkpoints are
+evaluated at **1 NFE** with, e.g., $\omega=8$, $t_{\min}=0.4$, $t_{\max}=0.65$.
+
+## 9.13 Guidance interval vs number of inference steps
+
+These are orthogonal variables and must not be conflated:
+
+$$ [t_{\min},t_{\max}]=\text{where guidance is conceptually active on the underlying flow}, $$
+$$ \mathrm{NFE}=\text{how many network evaluations you actually run to generate}. $$
+
+So $t_{\min}=0.4,\ t_{\max}=0.65$ with $\mathrm{NFE}=1$ is perfectly consistent —
+and is exactly how iMF is evaluated.
+
+## 9.14 The full FM → MF → modified MF → iMF ladder
+
+$$ \textbf{FM:}\quad v_\theta(z,t)\to v_c,\qquad v_\theta^\ast=v,\qquad \text{integrate } \tfrac{dz}{dt}=v_\theta \text{ (multistep)}. $$
+$$ \textbf{MF:}\quad u_{\rm tgt}=v_c-\Delta\,\mathrm{JVP}(u_\theta;v_c),\qquad u_\theta\to\operatorname{sg}(u_{\rm tgt}). $$
+Enables one-step $z_0=z_1-u(z_1,0,1)$; but noisy $v_c$ enters the JVP, the target
+moves, and $\omega$ is fixed at train time.
+$$ \textbf{Modified MF:}\quad u_{\rm tgt}=v_c-\Delta\,\mathrm{JVP}(u_\theta;v_\theta),\quad v_\theta=u_\theta(z,t,t). $$
+Removes the noisy tangent, but the target still moves.
+$$ \textbf{iMF:}\quad V_\theta=u_\theta+\Delta\,\mathrm{JVP}(u_\theta;v_\theta)\to v_c,\qquad V_\theta^\ast=v. $$
+Core target is FM's fixed data label, yet $u_\theta$ stays the one-step
+parameterization — and $(\omega,t_{\min},t_{\max})$ are inputs. The one-sentence
+compression:
+
+$$ \textbf{FM: learn the local arrow } v;\quad \textbf{MF: learn the average arrow } u;\quad \textbf{iMF: still learn } u \text{, but through a cleaner } v\text{-regression}. $$
+
+> **Key takeaway.** Stop-gradient only freezes MeanFlow's target *within* an
+> update — across updates the target $v_c-\Delta\dot u_{\theta_k}$ still drifts, so
+> original MF is bootstrapped regression toward a moving target. The second,
+> independent flaw is that the *noisy* conditional label $v_c=v+\eta$ enters the
+> JVP as a tangent, where the Jacobian's singular directions (SVD
+> $J=U\Sigma V^\top$, variance scaled by $\sigma_i^2$) can amplify it — harmless as
+> a label, harmful as a tangent. iMF fixes both by reversing the identity to
+> $V_\theta=u_\theta+\Delta\dot u_\theta\to v_c$ (fixed data label, optimum $v$)
+> while keeping $u_\theta$ one-step-capable, and by making guidance
+> $(\omega,t_{\min},t_{\max})$ *inputs* via in-context condition tokens. A one-step
+> model can still honor a guidance *interval* because it learns the integral of a
+> virtual guided flow — $t_{\min}{=}0.4,t_{\max}{=}0.65$ at $\mathrm{NFE}{=}1$ is
+> not a contradiction.
